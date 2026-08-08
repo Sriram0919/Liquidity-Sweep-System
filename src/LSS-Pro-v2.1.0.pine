@@ -1,0 +1,754 @@
+// ============================================================
+// LSS PRO — Liquidity Sweep System
+// Version  : 2.1.0
+// Release  : Liquidity Engine
+// Author   : Sriram0919
+// Repo     : https://github.com/Sriram0919/Liquidity-Sweep-System
+// Branch   : develop
+// License  : Private
+// ============================================================
+// Milestone 2 — Liquidity Engine
+//   ✓ Constants
+//   ✓ Inputs
+//   ✓ Helper Functions
+//   ✓ Session Engine
+//   ✓ HTF Engine
+//   ✓ Trend Engine
+//   ✓ Context Engine
+//   ✓ Dashboard Framework
+//   ✓ Debug Framework
+//   ✓ Visual Toggles
+//   ✓ Liquidity Engine (NEW)
+//       ✓ Swing High / Swing Low detection (no repaint)
+//       ✓ Buyside Liquidity (BSL) — SH, EQH
+//       ✓ Sellside Liquidity (SSL) — SL, EQL
+//       ✓ Equal High / Equal Low classification
+//       ✓ Sweep confirmed on previous bar close
+//       ✓ Swept level expiry
+//       ✓ EVT_BSL_SWEPT / EVT_SSL_SWEPT event vars
+//   ✗ FVG Engine             (v2.2.0)
+//   ✗ Market Structure       (v2.3.0)
+//   ✗ Confluence Scoring     (v2.4.0)
+//   ✗ Trade Engine           (v2.5.0)
+// ============================================================
+
+//@version=6
+indicator(
+     title            = "LSS Pro v2.1.0",
+     shorttitle       = "LSS Pro",
+     overlay          = true,
+     max_labels_count = 50,
+     max_lines_count  = 50,
+     max_boxes_count  = 10
+ )
+
+// ============================================================
+// SECTION 1 — CONSTANTS
+// ============================================================
+
+string VERSION = "v2.1.0"
+
+// Trend States
+string TREND_BULL    = "Bullish"
+string TREND_BEAR    = "Bearish"
+string TREND_NEUTRAL = "Neutral"
+
+// Context States
+string CTX_ABOVE  = "Above PDH"
+string CTX_BELOW  = "Below PDL"
+string CTX_INSIDE = "Inside Range"
+
+// Session Names
+string SES_INDIA    = "India"
+string SES_LONDON   = "London"
+string SES_NEW_YORK = "New York"
+string SES_ASIA     = "Asia"
+string SES_NONE     = "—"
+
+// HTF Timeframe Strings
+string TF_15M = "15"
+string TF_30M = "30"
+string TF_1H  = "60"
+string TF_4H  = "240"
+string TF_1D  = "1D"
+
+// EMA Lengths
+int EMA_FAST_LEN = 50
+int EMA_SLOW_LEN = 200
+
+// Dashboard Positions
+string POS_TL = "Top Right"
+string POS_TR = "Top Left"
+string POS_BL = "Bottom Left"
+string POS_BR = "Bottom Right"
+
+// Colors — global palette
+color COLOR_BULL    = color.new(#00C087, 0)
+color COLOR_BEAR    = color.new(#FF3B30, 0)
+color COLOR_NEUTRAL = color.new(#FFD60A, 0)
+color COLOR_INFO    = color.new(#5AC8FA, 0)
+color COLOR_DIM     = color.new(#8E8E93, 0)
+color COLOR_BG      = color.new(#1C1C1E, 90)
+color COLOR_HEADER  = color.new(#2C2C2E, 80)
+color COLOR_WHITE   = color.new(#FFFFFF, 0)
+color COLOR_NONE    = color.new(#000000, 100)
+
+// Liquidity Level Types
+string LT_SH  = "SH"
+string LT_EQH = "EQH"
+string LT_SL  = "SL"
+string LT_EQL = "EQL"
+
+// ============================================================
+// SECTION 2 — INPUTS
+// ============================================================
+
+// ── EMA ──────────────────────────────────────────────────────
+string GRP_EMA = "═══ EMA Settings ═══"
+bool   IN_SHOW_EMA50   = input.bool(true,  "Show EMA 50",  group = GRP_EMA, inline = "ema50")
+color  IN_COLOR_EMA50  = input.color(color.new(#FFD60A, 60), "", group = GRP_EMA, inline = "ema50")
+bool   IN_SHOW_EMA200  = input.bool(true,  "Show EMA 200", group = GRP_EMA, inline = "ema200")
+color  IN_COLOR_EMA200 = input.color(color.new(#5AC8FA, 60), "", group = GRP_EMA, inline = "ema200")
+
+// ── Previous Day Levels ───────────────────────────────────────
+string GRP_PDH = "═══ Previous Day Levels ═══"
+bool  IN_SHOW_PDH  = input.bool(true, "Show PDH / PDL", group = GRP_PDH)
+color IN_COLOR_PDH = input.color(color.new(#00C087, 70), "PDH Color", group = GRP_PDH)
+color IN_COLOR_PDL = input.color(color.new(#FF3B30, 70), "PDL Color", group = GRP_PDH)
+
+// ── HTF Engine ───────────────────────────────────────────────
+string GRP_HTF = "═══ HTF Engine ═══"
+bool   IN_HTF_AUTO   = input.bool(true, "Auto HTF Mapping", group = GRP_HTF)
+string IN_HTF_MANUAL = input.timeframe("60", "Manual HTF Override", group = GRP_HTF)
+
+// ── Session Engine ────────────────────────────────────────────
+string GRP_SES = "═══ Session Filter ═══"
+bool IN_SES_INDIA  = input.bool(true,  "India  (09:15 – 15:30 IST)", group = GRP_SES)
+bool IN_SES_LONDON = input.bool(true,  "London (08:00 – 16:30 GMT)", group = GRP_SES)
+bool IN_SES_NY     = input.bool(true,  "New York (09:30 – 16:00 EST)", group = GRP_SES)
+bool IN_SES_ASIA   = input.bool(false, "Asia   (00:00 – 08:00 GMT)", group = GRP_SES)
+
+// ── Liquidity Engine ─────────────────────────────────────────
+string GRP_LIQ = "═══ Liquidity Engine ═══"
+
+int   IN_SWING_LB     = input.int(5, "Swing Lookback", minval = 2, maxval = 20, group = GRP_LIQ,
+     tooltip = "Bars required on each side of a pivot to confirm it. Higher = fewer but stronger levels.")
+float IN_EQ_TOL       = input.float(3.0, "EQH / EQL Tolerance (ticks)", minval = 0.5, maxval = 20.0,
+     step = 0.5, group = GRP_LIQ,
+     tooltip = "Two pivots within this many ticks are classified as Equal High / Equal Low.")
+bool  IN_SHOW_SWEPT   = input.bool(true, "Show Swept Levels", group = GRP_LIQ)
+int   IN_SWEPT_EXPIRY = input.int(30, "Remove Swept After (bars)", minval = 5, maxval = 200,
+     group = GRP_LIQ, tooltip = "Swept levels fade out after this many bars.")
+
+bool  IN_SHOW_BSL     = input.bool(true, "Show Buyside Liquidity",  group = GRP_LIQ, inline = "bsl")
+color IN_BSL_COLOR    = input.color(color.new(#FF453A, 0), "", group = GRP_LIQ, inline = "bsl")
+
+bool  IN_SHOW_SSL     = input.bool(true, "Show Sellside Liquidity", group = GRP_LIQ, inline = "ssl")
+color IN_SSL_COLOR    = input.color(color.new(#30D158, 0), "", group = GRP_LIQ, inline = "ssl")
+
+color IN_EQ_BSL_COLOR = input.color(color.new(#FF9F0A, 0), "Equal High Color", group = GRP_LIQ)
+color IN_EQ_SSL_COLOR = input.color(color.new(#FFD60A, 0), "Equal Low Color",  group = GRP_LIQ)
+color IN_SWEPT_COLOR  = input.color(color.new(#636366, 70), "Swept Color",     group = GRP_LIQ)
+
+// ── Dashboard ─────────────────────────────────────────────────
+string GRP_DASH = "═══ Dashboard ═══"
+bool   IN_SHOW_DASH = input.bool(true, "Show Dashboard", group = GRP_DASH)
+string IN_DASH_POS  = input.string(POS_TL, "Position",
+     options = [POS_TL, POS_TR, POS_BL, POS_BR], group = GRP_DASH)
+
+// ── Debug ─────────────────────────────────────────────────────
+string GRP_DBG = "═══ Debug ═══"
+bool IN_SHOW_DEBUG = input.bool(false, "Show Debug Label", group = GRP_DBG)
+
+// ============================================================
+// SECTION 3 — HELPER FUNCTIONS
+// ============================================================
+
+fn_trend_color(string trend) =>
+    trend == TREND_BULL ? COLOR_BULL :
+     trend == TREND_BEAR ? COLOR_BEAR :
+     COLOR_NEUTRAL
+
+fn_resolve_htf() =>
+    tf = timeframe.period
+    tf == "1"  ? TF_15M :
+     tf == "3"  ? TF_30M :
+     tf == "5"  ? TF_1H  :
+     tf == "15" ? TF_4H  :
+     tf == "30" ? TF_4H  :
+     tf == "60" ? TF_1D  :
+     TF_1D
+
+fn_table_pos(string pos) =>
+    pos == POS_TL ? position.top_right   :
+     pos == POS_TR ? position.top_left    :
+     pos == POS_BL ? position.bottom_left :
+     position.bottom_right
+
+fn_htf_label(string tf) =>
+    tf == TF_1D  ? "Daily" :
+     tf == TF_4H  ? "4H"    :
+     tf == TF_1H  ? "1H"    :
+     tf == TF_30M ? "30m"   :
+     tf == TF_15M ? "15m"   :
+     tf
+
+// ============================================================
+// SECTION 4 — SESSION ENGINE
+// ============================================================
+
+bool SES_INDIA_ACTIVE  = IN_SES_INDIA  and time(timeframe.period, "0345-1000", "UTC") != 0
+bool SES_LONDON_ACTIVE = IN_SES_LONDON and time(timeframe.period, "0800-1630", "UTC") != 0
+bool SES_NY_ACTIVE     = IN_SES_NY     and time(timeframe.period, "1430-2100", "UTC") != 0
+bool SES_ASIA_ACTIVE   = IN_SES_ASIA   and time(timeframe.period, "0000-0800", "UTC") != 0
+
+string ACTIVE_SESSION =
+     SES_INDIA_ACTIVE  ? SES_INDIA    :
+     SES_LONDON_ACTIVE ? SES_LONDON   :
+     SES_NY_ACTIVE     ? SES_NEW_YORK :
+     SES_ASIA_ACTIVE   ? SES_ASIA     :
+     SES_NONE
+
+color ACTIVE_SESSION_COLOR =
+     SES_INDIA_ACTIVE  ? color.new(#FF9F0A, 0) :
+     SES_LONDON_ACTIVE ? color.new(#30D158, 0) :
+     SES_NY_ACTIVE     ? color.new(#5AC8FA, 0) :
+     SES_ASIA_ACTIVE   ? color.new(#BF5AF2, 0) :
+     COLOR_DIM
+
+// ============================================================
+// SECTION 5 — HTF ENGINE
+// ============================================================
+
+string RESOLVED_HTF = IN_HTF_AUTO ? fn_resolve_htf() : IN_HTF_MANUAL
+
+[HTF_OPEN, HTF_HIGH, HTF_LOW, HTF_CLOSE] =
+     request.security(syminfo.tickerid, RESOLVED_HTF,
+         [open, high, low, close],
+         lookahead = barmerge.lookahead_off)
+
+// ============================================================
+// SECTION 6 — TREND ENGINE
+// ============================================================
+
+float EMA50  = ta.ema(close, EMA_FAST_LEN)
+float EMA200 = ta.ema(close, EMA_SLOW_LEN)
+
+string TREND_STATE =
+     EMA50 > EMA200 ? TREND_BULL :
+     EMA50 < EMA200 ? TREND_BEAR :
+     TREND_NEUTRAL
+
+color TREND_COLOR  = fn_trend_color(TREND_STATE)
+bool  TREND_CHANGED = TREND_STATE != TREND_STATE[1]
+
+// ============================================================
+// SECTION 7 — CONTEXT ENGINE
+// ============================================================
+
+[PD_HIGH, PD_LOW] =
+     request.security(syminfo.tickerid, "1D",
+         [high[1], low[1]],
+         lookahead = barmerge.lookahead_off)
+
+string MARKET_CONTEXT =
+     close > PD_HIGH ? CTX_ABOVE :
+     close < PD_LOW  ? CTX_BELOW :
+     CTX_INSIDE
+
+color CONTEXT_COLOR =
+     MARKET_CONTEXT == CTX_ABOVE ? COLOR_BULL  :
+     MARKET_CONTEXT == CTX_BELOW ? COLOR_BEAR  :
+     COLOR_NEUTRAL
+
+// ============================================================
+// SECTION 8 — VISUAL ENGINE
+// ============================================================
+
+// EMAs — subtle background reference (60% transparent)
+plot(IN_SHOW_EMA50  ? EMA50  : na, title = "EMA 50",
+     color = IN_COLOR_EMA50,  linewidth = 1)
+plot(IN_SHOW_EMA200 ? EMA200 : na, title = "EMA 200",
+     color = IN_COLOR_EMA200, linewidth = 1)
+// PDH / PDL — subtle step lines (70% transparent)
+plot(IN_SHOW_PDH    ? PD_HIGH : na, title = "PDH",
+     color = IN_COLOR_PDH, linewidth = 1, style = plot.style_stepline)
+plot(IN_SHOW_PDH    ? PD_LOW  : na, title = "PDL",
+     color = IN_COLOR_PDL, linewidth = 1, style = plot.style_stepline)
+
+// ============================================================
+// SECTION 12 — LIQUIDITY ENGINE
+// ============================================================
+// Architecture:
+//   Buyside Liquidity  (BSL) = highs where BUY stops rest
+//     → Swept when wick > level and close < level (bearish)
+//   Sellside Liquidity (SSL) = lows where SELL stops rest
+//     → Swept when wick < level and close > level (bullish)
+//
+// Sweep detection uses PREVIOUS bar (high[1]/close[1]) for
+// zero repainting. Sweep fires exactly once per level.
+//
+// Events published:
+//   EVT_BSL_SWEPT — true on the bar a BSL is confirmed swept
+//   EVT_SSL_SWEPT — true on the bar a SSL is confirmed swept
+//   EVT_BSL_PRICE / EVT_SSL_PRICE — price of the swept level
+// These will be consumed by the Confluence Scoring Engine (v2.4.0)
+// ============================================================
+
+// ── 12.1 State Arrays — Buyside Liquidity (BSL) ─────────────
+var array<float>  bsl_price     = array.new<float>()
+var array<int>    bsl_bar       = array.new<int>()
+var array<bool>   bsl_swept     = array.new<bool>()
+var array<int>    bsl_swept_bar = array.new<int>()
+var array<string> bsl_type      = array.new<string>()
+var array<line>   bsl_lines     = array.new<line>()
+var array<label>  bsl_labels    = array.new<label>()
+
+// ── 12.2 State Arrays — Sellside Liquidity (SSL) ────────────
+var array<float>  ssl_price     = array.new<float>()
+var array<int>    ssl_bar       = array.new<int>()
+var array<bool>   ssl_swept     = array.new<bool>()
+var array<int>    ssl_swept_bar = array.new<int>()
+var array<string> ssl_type      = array.new<string>()
+var array<line>   ssl_lines     = array.new<line>()
+var array<label>  ssl_labels    = array.new<label>()
+
+// ── 12.3 Sweep Event Variables ───────────────────────────────
+// Reset each bar, set to true only on sweep bar
+var bool   EVT_BSL_SWEPT  = false
+var bool   EVT_SSL_SWEPT  = false
+var float  EVT_BSL_PRICE  = na
+var float  EVT_SSL_PRICE  = na
+var string LIQ_LAST_SWEEP = "—"     // human-readable, for dashboard
+
+EVT_BSL_SWEPT := false
+EVT_SSL_SWEPT := false
+
+// ── 12.4 Swing Detection ─────────────────────────────────────
+// ta.pivothigh/pivotlow are confirmed at bar_index[right_bars].
+// Returning a value means a pivot exists at that bar — no repaint.
+float swing_h  = ta.pivothigh(high, IN_SWING_LB, IN_SWING_LB)
+float swing_l  = ta.pivotlow (low,  IN_SWING_LB, IN_SWING_LB)
+int   pivot_bar = bar_index - IN_SWING_LB   // actual bar the pivot formed at
+
+// Tolerance for EQH/EQL classification
+float EQ_TOL = IN_EQ_TOL * syminfo.mintick
+
+// ── 12.5 BSL Level Management ────────────────────────────────
+if not na(swing_h) and IN_SHOW_BSL
+    float px    = swing_h
+    bool  is_eq = false
+    int   n_bsl = array.size(bsl_price)
+
+    // Check if this pivot is within tolerance of an existing unswept BSL
+    if n_bsl > 0
+        for i = 0 to n_bsl - 1
+            if not array.get(bsl_swept, i)
+                if math.abs(array.get(bsl_price, i) - px) <= EQ_TOL
+                    // Upgrade existing level to EQH — thicker, highlighted
+                    array.set(bsl_type, i, LT_EQH)
+                    line.set_color(array.get(bsl_lines,  i), IN_EQ_BSL_COLOR)
+                    line.set_width(array.get(bsl_lines,  i), 3)
+                    label.set_text(array.get(bsl_labels, i),
+                         "◆ " + LT_EQH + "  " + str.tostring(array.get(bsl_price, i), format.mintick))
+                    label.set_textcolor(array.get(bsl_labels, i), IN_EQ_BSL_COLOR)
+                    label.set_size(array.get(bsl_labels, i), size.small)
+                    is_eq := true
+                    break
+
+    if not is_eq
+        // Trim oldest level if at capacity (FIFO)
+        if array.size(bsl_price) >= 5
+            line.delete(array.shift(bsl_lines))
+            label.delete(array.shift(bsl_labels))
+            array.shift(bsl_price)
+            array.shift(bsl_bar)
+            array.shift(bsl_swept)
+            array.shift(bsl_swept_bar)
+            array.shift(bsl_type)
+
+        // Draw level line — solid, extends right until swept
+        line bsl_ln = line.new(
+             x1     = pivot_bar,
+             y1     = px,
+             x2     = bar_index + 1,
+             y2     = px,
+             extend = extend.right,
+             color  = IN_BSL_COLOR,
+             width  = 2,
+             style  = line.style_solid)
+
+        // Draw label — above the line, readable
+        label bsl_lb = label.new(
+             x         = bar_index + 8,
+             y         = px,
+             text      = "▼ " + LT_SH + "  " + str.tostring(px, format.mintick),
+             color     = COLOR_NONE,
+             textcolor = IN_BSL_COLOR,
+             style     = label.style_label_down,
+             size      = size.small)
+
+        array.push(bsl_price,     px)
+        array.push(bsl_bar,       pivot_bar)
+        array.push(bsl_swept,     false)
+        array.push(bsl_swept_bar, 0)
+        array.push(bsl_type,      LT_SH)
+        array.push(bsl_lines,     bsl_ln)
+        array.push(bsl_labels,    bsl_lb)
+
+// ── 12.6 SSL Level Management ────────────────────────────────
+if not na(swing_l) and IN_SHOW_SSL
+    float px    = swing_l
+    bool  is_eq = false
+    int   n_ssl = array.size(ssl_price)
+
+    if n_ssl > 0
+        for i = 0 to n_ssl - 1
+            if not array.get(ssl_swept, i)
+                if math.abs(array.get(ssl_price, i) - px) <= EQ_TOL
+                    // Upgrade existing level to EQL — thicker, highlighted
+                    array.set(ssl_type, i, LT_EQL)
+                    line.set_color(array.get(ssl_lines,  i), IN_EQ_SSL_COLOR)
+                    line.set_width(array.get(ssl_lines,  i), 3)
+                    label.set_text(array.get(ssl_labels, i),
+                         "◆ " + LT_EQL + "  " + str.tostring(array.get(ssl_price, i), format.mintick))
+                    label.set_textcolor(array.get(ssl_labels, i), IN_EQ_SSL_COLOR)
+                    label.set_size(array.get(ssl_labels, i), size.small)
+                    is_eq := true
+                    break
+
+    if not is_eq
+        if array.size(ssl_price) >= 5
+            line.delete(array.shift(ssl_lines))
+            label.delete(array.shift(ssl_labels))
+            array.shift(ssl_price)
+            array.shift(ssl_bar)
+            array.shift(ssl_swept)
+            array.shift(ssl_swept_bar)
+            array.shift(ssl_type)
+
+        // Draw level line — solid, extends right until swept
+        line ssl_ln = line.new(
+             x1     = pivot_bar,
+             y1     = px,
+             x2     = bar_index + 1,
+             y2     = px,
+             extend = extend.right,
+             color  = IN_SSL_COLOR,
+             width  = 2,
+             style  = line.style_solid)
+
+        // Draw label — below the line, readable
+        label ssl_lb = label.new(
+             x         = bar_index + 8,
+             y         = px,
+             text      = "▲ " + LT_SL + "  " + str.tostring(px, format.mintick),
+             color     = COLOR_NONE,
+             textcolor = IN_SSL_COLOR,
+             style     = label.style_label_up,
+             size      = size.small)
+
+        array.push(ssl_price,     px)
+        array.push(ssl_bar,       pivot_bar)
+        array.push(ssl_swept,     false)
+        array.push(ssl_swept_bar, 0)
+        array.push(ssl_type,      LT_SL)
+        array.push(ssl_lines,     ssl_ln)
+        array.push(ssl_labels,    ssl_lb)
+
+// ── 12.7 Sweep Detection ─────────────────────────────────────
+// Uses high[1] / close[1] / low[1] — previous bar confirmed close.
+// This guarantees zero repainting. Sweep fires exactly once per level.
+
+// BSL Sweep: wick above → close below (bearish sweep, short setup)
+int n_bsl_sweep = array.size(bsl_price)
+if n_bsl_sweep > 0
+    for i = 0 to n_bsl_sweep - 1
+        if not array.get(bsl_swept, i)
+            float lvl = array.get(bsl_price, i)
+            if high[1] > lvl and close[1] < lvl
+                // Confirm sweep
+                array.set(bsl_swept,     i, true)
+                array.set(bsl_swept_bar, i, bar_index - 1)
+
+                // Update line: stop extension, fade
+                line ln = array.get(bsl_lines, i)
+                line.set_extend(ln, extend.none)
+                line.set_x2(ln,    bar_index)
+                line.set_color(ln, IN_SWEPT_COLOR)
+                line.set_style(ln, line.style_dashed)
+                line.set_width(ln, 1)
+
+                // Update label — swept marker
+                label lb = array.get(bsl_labels, i)
+                label.set_text(lb,
+                     "✦ " + array.get(bsl_type, i) +
+                     " SWEPT  " + str.tostring(lvl, format.mintick))
+                label.set_textcolor(lb, IN_SWEPT_COLOR)
+                label.set_size(lb, size.small)
+
+                // Publish events
+                EVT_BSL_SWEPT  := true
+                EVT_BSL_PRICE  := lvl
+                LIQ_LAST_SWEEP := "BSL ✦ " + str.tostring(lvl, format.mintick)
+
+// SSL Sweep: wick below → close above (bullish sweep, long setup)
+int n_ssl_sweep = array.size(ssl_price)
+if n_ssl_sweep > 0
+    for i = 0 to n_ssl_sweep - 1
+        if not array.get(ssl_swept, i)
+            float lvl = array.get(ssl_price, i)
+            if low[1] < lvl and close[1] > lvl
+                array.set(ssl_swept,     i, true)
+                array.set(ssl_swept_bar, i, bar_index - 1)
+
+                line ln = array.get(ssl_lines, i)
+                line.set_extend(ln, extend.none)
+                line.set_x2(ln,    bar_index)
+                line.set_color(ln, IN_SWEPT_COLOR)
+                line.set_style(ln, line.style_dashed)
+                line.set_width(ln, 1)
+
+                // Update label — swept marker
+                label lb = array.get(ssl_labels, i)
+                label.set_text(lb,
+                     "✦ " + array.get(ssl_type, i) +
+                     " SWEPT  " + str.tostring(lvl, format.mintick))
+                label.set_textcolor(lb, IN_SWEPT_COLOR)
+                label.set_size(lb, size.small)
+
+                EVT_SSL_SWEPT  := true
+                EVT_SSL_PRICE  := lvl
+                LIQ_LAST_SWEEP := "SSL ✦ " + str.tostring(lvl, format.mintick)
+
+// ── 12.8 Swept Level Expiry ───────────────────────────────────
+// Remove swept levels from arrays and chart after N bars.
+// Iterate backward to safely remove elements during loop.
+
+int n_bsl_exp = array.size(bsl_price)
+if n_bsl_exp > 0
+    for i = n_bsl_exp - 1 to 0
+        if array.get(bsl_swept, i)
+            bool expire = not IN_SHOW_SWEPT or
+                 (bar_index - array.get(bsl_swept_bar, i) > IN_SWEPT_EXPIRY)
+            if expire
+                line.delete(array.remove(bsl_lines,     i))
+                label.delete(array.remove(bsl_labels,   i))
+                array.remove(bsl_price,     i)
+                array.remove(bsl_bar,       i)
+                array.remove(bsl_swept,     i)
+                array.remove(bsl_swept_bar, i)
+                array.remove(bsl_type,      i)
+
+int n_ssl_exp = array.size(ssl_price)
+if n_ssl_exp > 0
+    for i = n_ssl_exp - 1 to 0
+        if array.get(ssl_swept, i)
+            bool expire = not IN_SHOW_SWEPT or
+                 (bar_index - array.get(ssl_swept_bar, i) > IN_SWEPT_EXPIRY)
+            if expire
+                line.delete(array.remove(ssl_lines,     i))
+                label.delete(array.remove(ssl_labels,   i))
+                array.remove(ssl_price,     i)
+                array.remove(ssl_bar,       i)
+                array.remove(ssl_swept,     i)
+                array.remove(ssl_swept_bar, i)
+                array.remove(ssl_type,      i)
+
+// ── 12.9 Label Position Update ───────────────────────────────
+// Keep unswept labels pinned to the right edge of the chart.
+// Runs only on the last bar — zero performance cost.
+if barstate.islast
+    int n_bsl_lbl = array.size(bsl_labels)
+    if n_bsl_lbl > 0
+        for i = 0 to n_bsl_lbl - 1
+            if not array.get(bsl_swept, i)
+                label.set_x(array.get(bsl_labels, i), bar_index + 8)
+
+    int n_ssl_lbl = array.size(ssl_labels)
+    if n_ssl_lbl > 0
+        for i = 0 to n_ssl_lbl - 1
+            if not array.get(ssl_swept, i)
+                label.set_x(array.get(ssl_labels, i), bar_index + 8)
+
+// ── 12.10 Sweep Signal Marker ────────────────────────────────
+// Plot a small marker on the bar where a sweep is confirmed.
+// These are plotchar-based — no object limit consumed.
+plotshape(EVT_BSL_SWEPT, title = "BSL Swept",
+     style    = shape.triangledown,
+     location = location.abovebar,
+     color    = IN_BSL_COLOR,
+     size     = size.tiny)
+
+plotshape(EVT_SSL_SWEPT, title = "SSL Swept",
+     style    = shape.triangleup,
+     location = location.belowbar,
+     color    = IN_SSL_COLOR,
+     size     = size.tiny)
+
+// ============================================================
+// SECTION 9 — DASHBOARD ENGINE  (updated for v2.1.0)
+// ============================================================
+
+var table DASHBOARD = table.new(
+     fn_table_pos(IN_DASH_POS),
+     columns      = 2,
+     rows         = 10,
+     bgcolor      = COLOR_BG,
+     border_color = COLOR_DIM,
+     border_width = 1,
+     frame_color  = COLOR_DIM,
+     frame_width  = 1
+ )
+
+dash_row(int row, string label_text, string value, color val_color) =>
+    table.cell(DASHBOARD, 0, row,
+         text       = label_text,
+         text_color = COLOR_DIM,
+         text_size  = size.small,
+         bgcolor    = COLOR_HEADER)
+    table.cell(DASHBOARD, 1, row,
+         text       = value,
+         text_color = val_color,
+         text_size  = size.small,
+         bgcolor    = COLOR_BG)
+
+if IN_SHOW_DASH and barstate.islast
+
+    // Row 0 — Header
+    table.cell(DASHBOARD, 0, 0,
+         text        = "LSS PRO  " + VERSION,
+         text_color  = COLOR_WHITE,
+         text_size   = size.small,
+         bgcolor     = color.new(#0A84FF, 0),
+         text_halign = text.align_center)
+    table.merge_cells(DASHBOARD, 0, 0, 1, 0)
+
+    // Row 1 — Session
+    dash_row(1, "Session", ACTIVE_SESSION, ACTIVE_SESSION_COLOR)
+
+    // Row 2 — HTF
+    dash_row(2, "HTF", fn_htf_label(RESOLVED_HTF), COLOR_INFO)
+
+    // Row 3 — HTF Close
+    dash_row(3, "HTF Close", str.tostring(HTF_CLOSE, format.mintick), COLOR_INFO)
+
+    // Row 4 — Trend
+    dash_row(4, "Trend", TREND_STATE, TREND_COLOR)
+
+    // Row 5 — Context
+    dash_row(5, "Context", MARKET_CONTEXT, CONTEXT_COLOR)
+
+    // Row 6 — PDH / PDL
+    dash_row(6, "PDH / PDL",
+         str.tostring(PD_HIGH, format.mintick) + " / " +
+         str.tostring(PD_LOW,  format.mintick),
+         COLOR_DIM)
+
+    // Row 7 — Active Liquidity Levels Count
+    int active_bsl = 0
+    int sz_bsl     = array.size(bsl_swept)
+    if sz_bsl > 0
+        for i = 0 to sz_bsl - 1
+            if not array.get(bsl_swept, i)
+                active_bsl += 1
+    int active_ssl = 0
+    int sz_ssl     = array.size(ssl_swept)
+    if sz_ssl > 0
+        for i = 0 to sz_ssl - 1
+            if not array.get(ssl_swept, i)
+                active_ssl += 1
+    dash_row(7, "Liq Levels",
+         "BSL " + str.tostring(active_bsl) + "  │  SSL " + str.tostring(active_ssl),
+         COLOR_DIM)
+
+    // Row 8 — Last Sweep
+    color sweep_clr = LIQ_LAST_SWEEP == "—" ? COLOR_DIM :
+         str.contains(LIQ_LAST_SWEEP, "BSL") ? IN_BSL_COLOR : IN_SSL_COLOR
+    dash_row(8, "Last Sweep", LIQ_LAST_SWEEP, sweep_clr)
+
+    // Row 9 — Status
+    dash_row(9, "Status", "Watching…", COLOR_DIM)
+
+// ============================================================
+// SECTION 10 — DEBUG ENGINE  (updated for v2.1.0)
+// ============================================================
+
+var label DEBUG_LABEL = label.new(
+     x         = bar_index,
+     y         = high,
+     text      = "",
+     color     = color.new(#1C1C1E, 10),
+     textcolor = COLOR_WHITE,
+     style     = label.style_label_left,
+     size      = size.normal
+ )
+
+if IN_SHOW_DEBUG and barstate.islast
+    // Count active levels
+    int dbg_bsl_count = 0
+    int dbg_bsl_sz    = array.size(bsl_swept)
+    if dbg_bsl_sz > 0
+        for i = 0 to dbg_bsl_sz - 1
+            if not array.get(bsl_swept, i)
+                dbg_bsl_count += 1
+
+    int dbg_ssl_count = 0
+    int dbg_ssl_sz    = array.size(ssl_swept)
+    if dbg_ssl_sz > 0
+        for i = 0 to dbg_ssl_sz - 1
+            if not array.get(ssl_swept, i)
+                dbg_ssl_count += 1
+
+    string dbg_text =
+         "── LSS Pro Debug ──\n" +
+         "Bar        : " + str.tostring(bar_index) + "\n" +
+         "HTF        : " + RESOLVED_HTF            + "\n" +
+         "Trend      : " + TREND_STATE             + "\n" +
+         "Session    : " + ACTIVE_SESSION          + "\n" +
+         "EMA 50     : " + str.tostring(EMA50,  "#.##") + "\n" +
+         "EMA 200    : " + str.tostring(EMA200, "#.##") + "\n" +
+         "PDH        : " + str.tostring(PD_HIGH, "#.##") + "\n" +
+         "PDL        : " + str.tostring(PD_LOW,  "#.##") + "\n" +
+         "Context    : " + MARKET_CONTEXT            + "\n" +
+         "─ Liquidity ─\n" +
+         "BSL Active : " + str.tostring(dbg_bsl_count) + " / 5\n" +
+         "SSL Active : " + str.tostring(dbg_ssl_count) + " / 5\n" +
+         "Last Sweep : " + LIQ_LAST_SWEEP             + "\n" +
+         "EVT_BSL    : " + str.tostring(EVT_BSL_SWEPT) + "\n" +
+         "EVT_SSL    : " + str.tostring(EVT_SSL_SWEPT)
+
+    label.set_xy(DEBUG_LABEL, bar_index + 2, high)
+    label.set_text(DEBUG_LABEL, dbg_text)
+
+if not IN_SHOW_DEBUG
+    label.set_text(DEBUG_LABEL, "")
+
+// ============================================================
+// SECTION 11 — ALERT ENGINE  (updated for v2.1.0)
+// ============================================================
+
+// Foundation Alerts
+alertcondition(TREND_CHANGED,
+     title   = "LSS Pro — Trend Change",
+     message = "LSS Pro | Trend: {{plot_0}} | {{ticker}} {{interval}}")
+
+bool SESSION_CHANGED = ACTIVE_SESSION != ACTIVE_SESSION[1]
+alertcondition(SESSION_CHANGED,
+     title   = "LSS Pro — Session Change",
+     message = "LSS Pro | Session changed | {{ticker}} {{interval}}")
+
+// Liquidity Sweep Alerts (NEW in v2.1.0)
+alertcondition(EVT_BSL_SWEPT,
+     title   = "LSS Pro — Buyside Liquidity Swept",
+     message = "LSS Pro | BSL SWEPT — Bearish Setup | {{ticker}} {{interval}}")
+
+alertcondition(EVT_SSL_SWEPT,
+     title   = "LSS Pro — Sellside Liquidity Swept",
+     message = "LSS Pro | SSL SWEPT — Bullish Setup | {{ticker}} {{interval}}")
+
+// ============================================================
+// END OF FILE — LSS Pro v2.1.0
+// Commit: feat: build LSS Pro v2.1.0 liquidity engine
+// Next  : v2.2.0 — FVG Engine
+// ============================================================
