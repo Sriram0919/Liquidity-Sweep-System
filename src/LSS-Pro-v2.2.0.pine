@@ -1,0 +1,1076 @@
+// ============================================================
+// LSS PRO — Liquidity Sweep System
+// Version  : 2.2.0
+// Release  : FVG Engine
+// Author   : Sriram0919
+// Repo     : https://github.com/Sriram0919/Liquidity-Sweep-System
+// Branch   : develop
+// License  : Private
+// ============================================================
+// Milestone 3 — FVG Engine
+//   ✓ Foundation (v2.0.1)
+//   ✓ Liquidity Engine (v2.1.0)
+//   ✓ FVG Engine (NEW)
+//       ✓ Bullish / Bearish FVG detection (no repaint)
+//       ✓ ATR-based quality grading (Noise/Small/Medium/Large)
+//       ✓ Consequent Encroachment (CE) — 50% midline
+//       ✓ Lifecycle: Fresh → Tested → Mitigated → Expired
+//       ✓ Post-sweep tagging (sweep within N bars)
+//       ✓ Visual boxes with grade-based transparency
+//       ✓ EVT_FVG_BULL / EVT_FVG_BEAR event vars
+//   ✗ Market Structure       (v2.3.0)
+//   ✗ Confluence Scoring     (v2.4.0)
+//   ✗ Trade Engine           (v2.5.0)
+// ============================================================
+
+//@version=6
+indicator(
+     title            = "LSS Pro v2.2.0",
+     shorttitle       = "LSS Pro",
+     overlay          = true,
+     max_labels_count = 100,
+     max_lines_count  = 100,
+     max_boxes_count  = 50
+ )
+
+// ============================================================
+// SECTION 1 — CONSTANTS
+// ============================================================
+
+string VERSION = "v2.2.0"
+
+// Trend States
+string TREND_BULL    = "Bullish"
+string TREND_BEAR    = "Bearish"
+string TREND_NEUTRAL = "Neutral"
+
+// Context States
+string CTX_ABOVE  = "Above PDH"
+string CTX_BELOW  = "Below PDL"
+string CTX_INSIDE = "Inside Range"
+
+// Session Names
+string SES_INDIA    = "India"
+string SES_LONDON   = "London"
+string SES_NEW_YORK = "New York"
+string SES_ASIA     = "Asia"
+string SES_NONE     = "—"
+
+// HTF Timeframe Strings
+string TF_15M = "15"
+string TF_30M = "30"
+string TF_1H  = "60"
+string TF_4H  = "240"
+string TF_1D  = "1D"
+
+// EMA Lengths
+int EMA_FAST_LEN = 50
+int EMA_SLOW_LEN = 200
+
+// Dashboard Positions
+string POS_TL = "Top Right"
+string POS_TR = "Top Left"
+string POS_BL = "Bottom Left"
+string POS_BR = "Bottom Right"
+
+// Colors — global palette
+color COLOR_BULL    = color.new(#00C087, 0)
+color COLOR_BEAR    = color.new(#FF3B30, 0)
+color COLOR_NEUTRAL = color.new(#FFD60A, 0)
+color COLOR_INFO    = color.new(#5AC8FA, 0)
+color COLOR_DIM     = color.new(#8E8E93, 0)
+color COLOR_BG      = color.new(#1C1C1E, 90)
+color COLOR_HEADER  = color.new(#2C2C2E, 80)
+color COLOR_WHITE   = color.new(#FFFFFF, 0)
+color COLOR_NONE    = color.new(#000000, 100)
+
+// Liquidity Level Types
+string LT_SH  = "SH"
+string LT_EQH = "EQH"
+string LT_SL  = "SL"
+string LT_EQL = "EQL"
+
+// FVG States
+string FVG_FRESH     = "Fresh"
+string FVG_TESTED    = "Tested"
+string FVG_MITIGATED = "Mitigated"
+
+// FVG Grades
+string FVG_GRADE_S = "S"
+string FVG_GRADE_M = "M"
+string FVG_GRADE_L = "L"
+
+// ============================================================
+// SECTION 2 — INPUTS
+// ============================================================
+
+// ── EMA ──────────────────────────────────────────────────────
+string GRP_EMA = "═══ EMA Settings ═══"
+bool   IN_SHOW_EMA50   = input.bool(true,  "Show EMA 50",  group = GRP_EMA, inline = "ema50")
+color  IN_COLOR_EMA50  = input.color(color.new(#FFD60A, 60), "", group = GRP_EMA, inline = "ema50")
+bool   IN_SHOW_EMA200  = input.bool(true,  "Show EMA 200", group = GRP_EMA, inline = "ema200")
+color  IN_COLOR_EMA200 = input.color(color.new(#5AC8FA, 60), "", group = GRP_EMA, inline = "ema200")
+
+// ── Previous Day Levels ───────────────────────────────────────
+string GRP_PDH = "═══ Previous Day Levels ═══"
+bool  IN_SHOW_PDH  = input.bool(true, "Show PDH / PDL", group = GRP_PDH)
+color IN_COLOR_PDH = input.color(color.new(#00C087, 85), "PDH Color", group = GRP_PDH)
+color IN_COLOR_PDL = input.color(color.new(#FF3B30, 85), "PDL Color", group = GRP_PDH)
+
+// ── HTF Engine ───────────────────────────────────────────────
+string GRP_HTF = "═══ HTF Engine ═══"
+bool   IN_HTF_AUTO   = input.bool(true, "Auto HTF Mapping", group = GRP_HTF)
+string IN_HTF_MANUAL = input.timeframe("60", "Manual HTF Override", group = GRP_HTF)
+
+// ── Session Engine ────────────────────────────────────────────
+string GRP_SES = "═══ Session Filter ═══"
+bool IN_SES_INDIA  = input.bool(true,  "India  (09:15 – 15:30 IST)", group = GRP_SES)
+bool IN_SES_LONDON = input.bool(true,  "London (08:00 – 16:30 GMT)", group = GRP_SES)
+bool IN_SES_NY     = input.bool(true,  "New York (09:30 – 16:00 EST)", group = GRP_SES)
+bool IN_SES_ASIA   = input.bool(false, "Asia   (00:00 – 08:00 GMT)", group = GRP_SES)
+
+// ── Liquidity Engine ─────────────────────────────────────────
+string GRP_LIQ = "═══ Liquidity Engine ═══"
+
+int   IN_SWING_LB     = input.int(5, "Swing Lookback", minval = 2, maxval = 20, group = GRP_LIQ,
+     tooltip = "Bars required on each side of a pivot to confirm it.")
+float IN_EQ_TOL       = input.float(3.0, "EQH / EQL Tolerance (ticks)", minval = 0.5, maxval = 20.0,
+     step = 0.5, group = GRP_LIQ)
+bool  IN_SHOW_SWEPT   = input.bool(true, "Show Swept Levels", group = GRP_LIQ)
+int   IN_SWEPT_EXPIRY = input.int(30, "Remove Swept After (bars)", minval = 5, maxval = 200, group = GRP_LIQ)
+
+bool  IN_SHOW_BSL     = input.bool(true, "Show Buyside Liquidity",  group = GRP_LIQ, inline = "bsl")
+color IN_BSL_COLOR    = input.color(color.new(#FF453A, 40), "", group = GRP_LIQ, inline = "bsl")
+
+bool  IN_SHOW_SSL     = input.bool(true, "Show Sellside Liquidity", group = GRP_LIQ, inline = "ssl")
+color IN_SSL_COLOR    = input.color(color.new(#30D158, 40), "", group = GRP_LIQ, inline = "ssl")
+
+color IN_EQ_BSL_COLOR = input.color(color.new(#FF9F0A, 30), "Equal High Color", group = GRP_LIQ)
+color IN_EQ_SSL_COLOR = input.color(color.new(#FFD60A, 30), "Equal Low Color",  group = GRP_LIQ)
+color IN_SWEPT_COLOR  = input.color(color.new(#636366, 70), "Swept Color",     group = GRP_LIQ)
+
+// ── FVG Engine ───────────────────────────────────────────────
+string GRP_FVG = "═══ FVG Engine ═══"
+
+bool  IN_SHOW_FVG       = input.bool(true,  "Show Fair Value Gaps", group = GRP_FVG)
+bool  IN_SHOW_FVG_BULL  = input.bool(true,  "Bullish FVG", group = GRP_FVG, inline = "fvgbull")
+color IN_FVG_BULL_COLOR = input.color(color.new(#00C087, 0), "", group = GRP_FVG, inline = "fvgbull")
+bool  IN_SHOW_FVG_BEAR  = input.bool(true,  "Bearish FVG", group = GRP_FVG, inline = "fvgbear")
+color IN_FVG_BEAR_COLOR = input.color(color.new(#FF3B30, 0), "", group = GRP_FVG, inline = "fvgbear")
+
+float IN_FVG_MIN_ATR    = input.float(0.75, "Min FVG Size (× ATR)", minval = 0.1, maxval = 2.0,
+     step = 0.05, group = GRP_FVG,
+     tooltip = "FVGs smaller than this multiple of ATR(14) are filtered as noise.")
+float IN_FVG_BODY_PCT   = input.float(0.75, "Impulse Body % (candle 2)", minval = 0.3, maxval = 1.0,
+     step = 0.05, group = GRP_FVG,
+     tooltip = "Candle 2 body must be ≥ this % of its range AND match FVG direction. Filters weak/noisy FVGs.")
+int   IN_FVG_MAX_AGE    = input.int(50, "FVG Max Age (bars)", minval = 10, maxval = 200,
+     group = GRP_FVG, tooltip = "Unmitigated FVGs expire after this many bars.")
+bool  IN_SHOW_CE        = input.bool(true, "Show CE Line (50%)", group = GRP_FVG,
+     tooltip = "Consequent Encroachment — the 50% midpoint of the FVG. Common institutional entry level.")
+int   IN_FVG_SWEEP_WIN  = input.int(5, "Post-Sweep Window (bars)", minval = 1, maxval = 15,
+     group = GRP_FVG,
+     tooltip = "FVG formed within this many bars after a sweep gets tagged as post-sweep (highest quality).")
+bool  IN_SHOW_FVG_MIT   = input.bool(true, "Show Mitigated FVGs", group = GRP_FVG)
+int   IN_FVG_MIT_EXPIRY = input.int(20, "Remove Mitigated After (bars)", minval = 5, maxval = 100,
+     group = GRP_FVG)
+color IN_FVG_MIT_COLOR  = input.color(color.new(#636366, 85), "Mitigated Color", group = GRP_FVG)
+color IN_FVG_TEST_COLOR = input.color(color.new(#FFD60A, 70), "Tested Border Color", group = GRP_FVG)
+
+// ── Dashboard ─────────────────────────────────────────────────
+string GRP_DASH = "═══ Dashboard ═══"
+bool   IN_SHOW_DASH = input.bool(true, "Show Dashboard", group = GRP_DASH)
+string IN_DASH_POS  = input.string(POS_TL, "Position",
+     options = [POS_TL, POS_TR, POS_BL, POS_BR], group = GRP_DASH)
+
+// ── Debug ─────────────────────────────────────────────────────
+string GRP_DBG = "═══ Debug ═══"
+bool IN_SHOW_DEBUG = input.bool(false, "Show Debug Label", group = GRP_DBG)
+
+// ============================================================
+// SECTION 3 — HELPER FUNCTIONS
+// ============================================================
+
+fn_trend_color(string trend) =>
+    trend == TREND_BULL ? COLOR_BULL :
+     trend == TREND_BEAR ? COLOR_BEAR :
+     COLOR_NEUTRAL
+
+fn_resolve_htf() =>
+    tf = timeframe.period
+    tf == "1"  ? TF_15M :
+     tf == "3"  ? TF_30M :
+     tf == "5"  ? TF_1H  :
+     tf == "15" ? TF_4H  :
+     tf == "30" ? TF_4H  :
+     tf == "60" ? TF_1D  :
+     TF_1D
+
+fn_table_pos(string pos) =>
+    pos == POS_TL ? position.top_right   :
+     pos == POS_TR ? position.top_left    :
+     pos == POS_BL ? position.bottom_left :
+     position.bottom_right
+
+fn_htf_label(string tf) =>
+    tf == TF_1D  ? "Daily" :
+     tf == TF_4H  ? "4H"    :
+     tf == TF_1H  ? "1H"    :
+     tf == TF_30M ? "30m"   :
+     tf == TF_15M ? "15m"   :
+     tf
+
+// FVG transparency based on grade
+fn_fvg_transp(string grade) =>
+    grade == FVG_GRADE_L ? 80 :
+     grade == FVG_GRADE_M ? 85 :
+     90
+
+// ============================================================
+// SECTION 4 — SESSION ENGINE
+// ============================================================
+
+bool SES_INDIA_ACTIVE  = IN_SES_INDIA  and time(timeframe.period, "0345-1000", "UTC") != 0
+bool SES_LONDON_ACTIVE = IN_SES_LONDON and time(timeframe.period, "0800-1630", "UTC") != 0
+bool SES_NY_ACTIVE     = IN_SES_NY     and time(timeframe.period, "1430-2100", "UTC") != 0
+bool SES_ASIA_ACTIVE   = IN_SES_ASIA   and time(timeframe.period, "0000-0800", "UTC") != 0
+
+string ACTIVE_SESSION =
+     SES_INDIA_ACTIVE  ? SES_INDIA    :
+     SES_LONDON_ACTIVE ? SES_LONDON   :
+     SES_NY_ACTIVE     ? SES_NEW_YORK :
+     SES_ASIA_ACTIVE   ? SES_ASIA     :
+     SES_NONE
+
+color ACTIVE_SESSION_COLOR =
+     SES_INDIA_ACTIVE  ? color.new(#FF9F0A, 0) :
+     SES_LONDON_ACTIVE ? color.new(#30D158, 0) :
+     SES_NY_ACTIVE     ? color.new(#5AC8FA, 0) :
+     SES_ASIA_ACTIVE   ? color.new(#BF5AF2, 0) :
+     COLOR_DIM
+
+// ============================================================
+// SECTION 5 — HTF ENGINE
+// ============================================================
+
+string RESOLVED_HTF = IN_HTF_AUTO ? fn_resolve_htf() : IN_HTF_MANUAL
+
+[HTF_OPEN, HTF_HIGH, HTF_LOW, HTF_CLOSE] =
+     request.security(syminfo.tickerid, RESOLVED_HTF,
+         [open, high, low, close],
+         lookahead = barmerge.lookahead_off)
+
+// ============================================================
+// SECTION 6 — TREND ENGINE
+// ============================================================
+
+float EMA50  = ta.ema(close, EMA_FAST_LEN)
+float EMA200 = ta.ema(close, EMA_SLOW_LEN)
+
+string TREND_STATE =
+     EMA50 > EMA200 ? TREND_BULL :
+     EMA50 < EMA200 ? TREND_BEAR :
+     TREND_NEUTRAL
+
+color TREND_COLOR   = fn_trend_color(TREND_STATE)
+bool  TREND_CHANGED = TREND_STATE != TREND_STATE[1]
+
+// ============================================================
+// SECTION 7 — CONTEXT ENGINE
+// ============================================================
+
+[PD_HIGH, PD_LOW] =
+     request.security(syminfo.tickerid, "1D",
+         [high[1], low[1]],
+         lookahead = barmerge.lookahead_off)
+
+string MARKET_CONTEXT =
+     close > PD_HIGH ? CTX_ABOVE :
+     close < PD_LOW  ? CTX_BELOW :
+     CTX_INSIDE
+
+color CONTEXT_COLOR =
+     MARKET_CONTEXT == CTX_ABOVE ? COLOR_BULL  :
+     MARKET_CONTEXT == CTX_BELOW ? COLOR_BEAR  :
+     COLOR_NEUTRAL
+
+// ============================================================
+// SECTION 8 — VISUAL ENGINE
+// ============================================================
+
+plot(IN_SHOW_EMA50  ? EMA50  : na, title = "EMA 50",
+     color = IN_COLOR_EMA50,  linewidth = 1)
+plot(IN_SHOW_EMA200 ? EMA200 : na, title = "EMA 200",
+     color = IN_COLOR_EMA200, linewidth = 1)
+plot(IN_SHOW_PDH    ? PD_HIGH : na, title = "PDH",
+     color = IN_COLOR_PDH, linewidth = 1, style = plot.style_stepline)
+plot(IN_SHOW_PDH    ? PD_LOW  : na, title = "PDL",
+     color = IN_COLOR_PDL, linewidth = 1, style = plot.style_stepline)
+
+// ============================================================
+// SECTION 12 — LIQUIDITY ENGINE
+// ============================================================
+
+var array<float>  bsl_price     = array.new<float>()
+var array<int>    bsl_bar       = array.new<int>()
+var array<bool>   bsl_swept     = array.new<bool>()
+var array<int>    bsl_swept_bar = array.new<int>()
+var array<string> bsl_type      = array.new<string>()
+var array<line>   bsl_lines     = array.new<line>()
+var array<label>  bsl_labels    = array.new<label>()
+
+var array<float>  ssl_price     = array.new<float>()
+var array<int>    ssl_bar       = array.new<int>()
+var array<bool>   ssl_swept     = array.new<bool>()
+var array<int>    ssl_swept_bar = array.new<int>()
+var array<string> ssl_type      = array.new<string>()
+var array<line>   ssl_lines     = array.new<line>()
+var array<label>  ssl_labels    = array.new<label>()
+
+var bool   EVT_BSL_SWEPT  = false
+var bool   EVT_SSL_SWEPT  = false
+var float  EVT_BSL_PRICE  = na
+var float  EVT_SSL_PRICE  = na
+var string LIQ_LAST_SWEEP = "—"
+
+// Track bar of last sweep for post-sweep FVG tagging
+var int LAST_BSL_SWEEP_BAR = 0
+var int LAST_SSL_SWEEP_BAR = 0
+
+EVT_BSL_SWEPT := false
+EVT_SSL_SWEPT := false
+
+float swing_h   = ta.pivothigh(high, IN_SWING_LB, IN_SWING_LB)
+float swing_l   = ta.pivotlow (low,  IN_SWING_LB, IN_SWING_LB)
+int   pivot_bar = bar_index - IN_SWING_LB
+float EQ_TOL   = IN_EQ_TOL * syminfo.mintick
+
+// ── BSL Level Management ─────────────────────────────────────
+if not na(swing_h) and IN_SHOW_BSL
+    float px    = swing_h
+    bool  is_eq = false
+    int   n_bsl = array.size(bsl_price)
+
+    if n_bsl > 0
+        for i = 0 to n_bsl - 1
+            if not array.get(bsl_swept, i)
+                if math.abs(array.get(bsl_price, i) - px) <= EQ_TOL
+                    array.set(bsl_type, i, LT_EQH)
+                    line.set_color(array.get(bsl_lines, i), IN_EQ_BSL_COLOR)
+                    line.set_width(array.get(bsl_lines, i), 2)
+                    label.set_text(array.get(bsl_labels, i),
+                         "◆ " + LT_EQH + "  " + str.tostring(array.get(bsl_price, i), format.mintick))
+                    label.set_textcolor(array.get(bsl_labels, i), IN_EQ_BSL_COLOR)
+                    label.set_size(array.get(bsl_labels, i), size.small)
+                    is_eq := true
+                    break
+
+    if not is_eq
+        if array.size(bsl_price) >= 5
+            line.delete(array.shift(bsl_lines))
+            label.delete(array.shift(bsl_labels))
+            array.shift(bsl_price)
+            array.shift(bsl_bar)
+            array.shift(bsl_swept)
+            array.shift(bsl_swept_bar)
+            array.shift(bsl_type)
+
+        line bsl_ln = line.new(pivot_bar, px, bar_index + 1, px,
+             extend = extend.right, color = IN_BSL_COLOR, width = 1, style = line.style_solid)
+        label bsl_lb = label.new(bar_index + 8, px,
+             text = "▼ " + LT_SH + "  " + str.tostring(px, format.mintick),
+             color = COLOR_NONE, textcolor = IN_BSL_COLOR,
+             style = label.style_label_down, size = size.small)
+
+        array.push(bsl_price, px)
+        array.push(bsl_bar, pivot_bar)
+        array.push(bsl_swept, false)
+        array.push(bsl_swept_bar, 0)
+        array.push(bsl_type, LT_SH)
+        array.push(bsl_lines, bsl_ln)
+        array.push(bsl_labels, bsl_lb)
+
+// ── SSL Level Management ─────────────────────────────────────
+if not na(swing_l) and IN_SHOW_SSL
+    float px    = swing_l
+    bool  is_eq = false
+    int   n_ssl = array.size(ssl_price)
+
+    if n_ssl > 0
+        for i = 0 to n_ssl - 1
+            if not array.get(ssl_swept, i)
+                if math.abs(array.get(ssl_price, i) - px) <= EQ_TOL
+                    array.set(ssl_type, i, LT_EQL)
+                    line.set_color(array.get(ssl_lines, i), IN_EQ_SSL_COLOR)
+                    line.set_width(array.get(ssl_lines, i), 2)
+                    label.set_text(array.get(ssl_labels, i),
+                         "◆ " + LT_EQL + "  " + str.tostring(array.get(ssl_price, i), format.mintick))
+                    label.set_textcolor(array.get(ssl_labels, i), IN_EQ_SSL_COLOR)
+                    label.set_size(array.get(ssl_labels, i), size.small)
+                    is_eq := true
+                    break
+
+    if not is_eq
+        if array.size(ssl_price) >= 5
+            line.delete(array.shift(ssl_lines))
+            label.delete(array.shift(ssl_labels))
+            array.shift(ssl_price)
+            array.shift(ssl_bar)
+            array.shift(ssl_swept)
+            array.shift(ssl_swept_bar)
+            array.shift(ssl_type)
+
+        line ssl_ln = line.new(pivot_bar, px, bar_index + 1, px,
+             extend = extend.right, color = IN_SSL_COLOR, width = 1, style = line.style_solid)
+        label ssl_lb = label.new(bar_index + 8, px,
+             text = "▲ " + LT_SL + "  " + str.tostring(px, format.mintick),
+             color = COLOR_NONE, textcolor = IN_SSL_COLOR,
+             style = label.style_label_up, size = size.small)
+
+        array.push(ssl_price, px)
+        array.push(ssl_bar, pivot_bar)
+        array.push(ssl_swept, false)
+        array.push(ssl_swept_bar, 0)
+        array.push(ssl_type, LT_SL)
+        array.push(ssl_lines, ssl_ln)
+        array.push(ssl_labels, ssl_lb)
+
+// ── Sweep Detection ──────────────────────────────────────────
+int n_bsl_sweep = array.size(bsl_price)
+if n_bsl_sweep > 0
+    for i = 0 to n_bsl_sweep - 1
+        if not array.get(bsl_swept, i)
+            float lvl = array.get(bsl_price, i)
+            if high[1] > lvl and close[1] < lvl
+                array.set(bsl_swept, i, true)
+                array.set(bsl_swept_bar, i, bar_index - 1)
+                line ln = array.get(bsl_lines, i)
+                line.set_extend(ln, extend.none)
+                line.set_x2(ln, bar_index)
+                line.set_color(ln, IN_SWEPT_COLOR)
+                line.set_style(ln, line.style_dashed)
+                line.set_width(ln, 1)
+                label lb = array.get(bsl_labels, i)
+                label.set_text(lb, "✦ " + array.get(bsl_type, i) + " SWEPT  " + str.tostring(lvl, format.mintick))
+                label.set_textcolor(lb, IN_SWEPT_COLOR)
+                label.set_size(lb, size.small)
+                EVT_BSL_SWEPT    := true
+                EVT_BSL_PRICE    := lvl
+                LIQ_LAST_SWEEP   := "BSL ✦ " + str.tostring(lvl, format.mintick)
+                LAST_BSL_SWEEP_BAR := bar_index
+
+int n_ssl_sweep = array.size(ssl_price)
+if n_ssl_sweep > 0
+    for i = 0 to n_ssl_sweep - 1
+        if not array.get(ssl_swept, i)
+            float lvl = array.get(ssl_price, i)
+            if low[1] < lvl and close[1] > lvl
+                array.set(ssl_swept, i, true)
+                array.set(ssl_swept_bar, i, bar_index - 1)
+                line ln = array.get(ssl_lines, i)
+                line.set_extend(ln, extend.none)
+                line.set_x2(ln, bar_index)
+                line.set_color(ln, IN_SWEPT_COLOR)
+                line.set_style(ln, line.style_dashed)
+                line.set_width(ln, 1)
+                label lb = array.get(ssl_labels, i)
+                label.set_text(lb, "✦ " + array.get(ssl_type, i) + " SWEPT  " + str.tostring(lvl, format.mintick))
+                label.set_textcolor(lb, IN_SWEPT_COLOR)
+                label.set_size(lb, size.small)
+                EVT_SSL_SWEPT    := true
+                EVT_SSL_PRICE    := lvl
+                LIQ_LAST_SWEEP   := "SSL ✦ " + str.tostring(lvl, format.mintick)
+                LAST_SSL_SWEEP_BAR := bar_index
+
+// ── Swept Level Expiry ───────────────────────────────────────
+int n_bsl_exp = array.size(bsl_price)
+if n_bsl_exp > 0
+    for i = n_bsl_exp - 1 to 0
+        if array.get(bsl_swept, i)
+            bool expire = not IN_SHOW_SWEPT or (bar_index - array.get(bsl_swept_bar, i) > IN_SWEPT_EXPIRY)
+            if expire
+                line.delete(array.remove(bsl_lines, i))
+                label.delete(array.remove(bsl_labels, i))
+                array.remove(bsl_price, i)
+                array.remove(bsl_bar, i)
+                array.remove(bsl_swept, i)
+                array.remove(bsl_swept_bar, i)
+                array.remove(bsl_type, i)
+
+int n_ssl_exp = array.size(ssl_price)
+if n_ssl_exp > 0
+    for i = n_ssl_exp - 1 to 0
+        if array.get(ssl_swept, i)
+            bool expire = not IN_SHOW_SWEPT or (bar_index - array.get(ssl_swept_bar, i) > IN_SWEPT_EXPIRY)
+            if expire
+                line.delete(array.remove(ssl_lines, i))
+                label.delete(array.remove(ssl_labels, i))
+                array.remove(ssl_price, i)
+                array.remove(ssl_bar, i)
+                array.remove(ssl_swept, i)
+                array.remove(ssl_swept_bar, i)
+                array.remove(ssl_type, i)
+
+// ── Label Position Update ────────────────────────────────────
+if barstate.islast
+    int n_bsl_lbl = array.size(bsl_labels)
+    if n_bsl_lbl > 0
+        for i = 0 to n_bsl_lbl - 1
+            if not array.get(bsl_swept, i)
+                label.set_x(array.get(bsl_labels, i), bar_index + 8)
+    int n_ssl_lbl = array.size(ssl_labels)
+    if n_ssl_lbl > 0
+        for i = 0 to n_ssl_lbl - 1
+            if not array.get(ssl_swept, i)
+                label.set_x(array.get(ssl_labels, i), bar_index + 8)
+
+// ── Sweep Signal Markers ─────────────────────────────────────
+plotshape(EVT_BSL_SWEPT, title = "BSL Swept",
+     style = shape.triangledown, location = location.abovebar,
+     color = IN_BSL_COLOR, size = size.tiny)
+plotshape(EVT_SSL_SWEPT, title = "SSL Swept",
+     style = shape.triangleup, location = location.belowbar,
+     color = IN_SSL_COLOR, size = size.tiny)
+
+// ============================================================
+// SECTION 13 — FVG ENGINE
+// ============================================================
+// Architecture:
+//   Bullish FVG: high[3] < low[1]  →  gap zone = [high[3], low[1]]
+//   Bearish FVG: low[3]  > high[1] →  gap zone = [high[1], low[3]]
+//
+//   Detection uses [1],[2],[3] — the 3-candle pattern is fully
+//   confirmed by bar[1]'s close. We detect on the NEXT bar.
+//   This guarantees zero repainting.
+//
+//   CE (Consequent Encroachment) = midpoint of the FVG.
+//   Mitigation: price crosses CE → Tested.
+//               price fills entire FVG → Mitigated.
+//
+//   Post-sweep tag: if a sweep happened within IN_FVG_SWEEP_WIN
+//   bars before FVG formation → highest quality signal.
+//
+// Events published:
+//   EVT_FVG_BULL       — true on the bar a bullish FVG is detected
+//   EVT_FVG_BEAR       — true on the bar a bearish FVG is detected
+//   EVT_FVG_BULL_TEST  — true when price enters a bull FVG zone
+//   EVT_FVG_BEAR_TEST  — true when price enters a bear FVG zone
+// ============================================================
+
+// ── 13.1 ATR for quality grading ─────────────────────────────
+float ATR_VAL = ta.atr(14)
+
+// ── 13.2 State Arrays — Bullish FVG ─────────────────────────
+var array<float>  fvg_bull_top       = array.new<float>()   // low[1] — top of gap
+var array<float>  fvg_bull_bot       = array.new<float>()   // high[3] — bottom of gap
+var array<float>  fvg_bull_ce        = array.new<float>()   // midpoint
+var array<int>    fvg_bull_bar       = array.new<int>()     // bar where FVG formed
+var array<string> fvg_bull_state     = array.new<string>()  // Fresh/Tested/Mitigated
+var array<string> fvg_bull_grade     = array.new<string>()  // S/M/L
+var array<int>    fvg_bull_mit_bar   = array.new<int>()     // bar where mitigated
+var array<bool>   fvg_bull_post_sweep = array.new<bool>()   // formed after a sweep?
+var array<box>    fvg_bull_boxes     = array.new<box>()
+var array<line>   fvg_bull_ce_lines  = array.new<line>()
+var array<label>  fvg_bull_labels    = array.new<label>()
+
+// ── 13.3 State Arrays — Bearish FVG ─────────────────────────
+var array<float>  fvg_bear_top       = array.new<float>()   // low[3] — top of gap
+var array<float>  fvg_bear_bot       = array.new<float>()   // high[1] — bottom of gap
+var array<float>  fvg_bear_ce        = array.new<float>()
+var array<int>    fvg_bear_bar       = array.new<int>()
+var array<string> fvg_bear_state     = array.new<string>()
+var array<string> fvg_bear_grade     = array.new<string>()
+var array<int>    fvg_bear_mit_bar   = array.new<int>()
+var array<bool>   fvg_bear_post_sweep = array.new<bool>()
+var array<box>    fvg_bear_boxes     = array.new<box>()
+var array<line>   fvg_bear_ce_lines  = array.new<line>()
+var array<label>  fvg_bear_labels    = array.new<label>()
+
+// ── 13.4 FVG Event Variables ─────────────────────────────────
+var bool EVT_FVG_BULL      = false
+var bool EVT_FVG_BEAR      = false
+var bool EVT_FVG_BULL_TEST = false
+var bool EVT_FVG_BEAR_TEST = false
+
+EVT_FVG_BULL      := false
+EVT_FVG_BEAR      := false
+EVT_FVG_BULL_TEST := false
+EVT_FVG_BEAR_TEST := false
+
+// ── 13.5 Bullish FVG Detection ───────────────────────────────
+// Pattern: bar[3].high < bar[1].low → upward gap
+// Impulse filter: candle 2 must be green with body ≥ IN_FVG_BODY_PCT of range
+float  c2_bull_body  = math.abs(close[2] - open[2])
+float  c2_bull_range = high[2] - low[2]
+bool   c2_bull_ok    = close[2] > open[2] and c2_bull_range > 0 and (c2_bull_body / c2_bull_range) >= IN_FVG_BODY_PCT
+bool   fvg_bull_detected = high[3] < low[1] and c2_bull_ok
+float  fvg_bull_top_px   = low[1]
+float  fvg_bull_bot_px   = high[3]
+float  fvg_bull_width    = fvg_bull_top_px - fvg_bull_bot_px
+float  fvg_bull_ce_px    = (fvg_bull_top_px + fvg_bull_bot_px) / 2.0
+string fvg_bull_gr       = fvg_bull_width >= ATR_VAL ? FVG_GRADE_L :
+                           fvg_bull_width >= ATR_VAL * 0.5 ? FVG_GRADE_M :
+                           FVG_GRADE_S
+
+// Check if this is a post-sweep FVG (SSL sweep happened recently → bullish FVG)
+bool fvg_bull_is_post_sweep = (bar_index - LAST_SSL_SWEEP_BAR) <= IN_FVG_SWEEP_WIN
+
+if fvg_bull_detected and IN_SHOW_FVG and IN_SHOW_FVG_BULL and fvg_bull_width >= ATR_VAL * IN_FVG_MIN_ATR
+    // Capacity check — FIFO
+    if array.size(fvg_bull_top) >= 5
+        box.delete(array.shift(fvg_bull_boxes))
+        line.delete(array.shift(fvg_bull_ce_lines))
+        label.delete(array.shift(fvg_bull_labels))
+        array.shift(fvg_bull_top)
+        array.shift(fvg_bull_bot)
+        array.shift(fvg_bull_ce)
+        array.shift(fvg_bull_bar)
+        array.shift(fvg_bull_state)
+        array.shift(fvg_bull_grade)
+        array.shift(fvg_bull_mit_bar)
+        array.shift(fvg_bull_post_sweep)
+
+    // Transparency based on grade
+    int transp = fn_fvg_transp(fvg_bull_gr)
+    color box_color = color.new(IN_FVG_BULL_COLOR, transp)
+
+    // Draw FVG box — starts at bar[2], right edge updated on barstate.islast
+    box fvg_bx = box.new(
+         left     = bar_index - 2,
+         top      = fvg_bull_top_px,
+         right    = bar_index + 10,
+         bottom   = fvg_bull_bot_px,
+         bgcolor  = box_color,
+         border_color = color.new(IN_FVG_BULL_COLOR, transp - 10),
+         border_width = 1)
+
+    // CE line — dotted at midpoint
+    line fvg_ce_ln = line.new(
+         x1 = bar_index - 2, y1 = fvg_bull_ce_px,
+         x2 = bar_index + 10, y2 = fvg_bull_ce_px,
+         color  = IN_SHOW_CE ? color.new(IN_FVG_BULL_COLOR, transp - 20) : COLOR_NONE,
+         width  = 1,
+         style  = line.style_dotted)
+
+    // Label — below the box
+    string lbl_prefix = fvg_bull_is_post_sweep ? "★ " : ""
+    label fvg_lb = label.new(
+         x         = bar_index + 8,
+         y         = fvg_bull_bot_px,
+         text      = lbl_prefix + "FVG " + fvg_bull_gr,
+         color     = COLOR_NONE,
+         textcolor = IN_FVG_BULL_COLOR,
+         style     = label.style_label_up,
+         size      = size.small)
+
+    array.push(fvg_bull_top,        fvg_bull_top_px)
+    array.push(fvg_bull_bot,        fvg_bull_bot_px)
+    array.push(fvg_bull_ce,         fvg_bull_ce_px)
+    array.push(fvg_bull_bar,        bar_index)
+    array.push(fvg_bull_state,      FVG_FRESH)
+    array.push(fvg_bull_grade,      fvg_bull_gr)
+    array.push(fvg_bull_mit_bar,    0)
+    array.push(fvg_bull_post_sweep, fvg_bull_is_post_sweep)
+    array.push(fvg_bull_boxes,      fvg_bx)
+    array.push(fvg_bull_ce_lines,   fvg_ce_ln)
+    array.push(fvg_bull_labels,     fvg_lb)
+
+    EVT_FVG_BULL := true
+
+// ── 13.6 Bearish FVG Detection ───────────────────────────────
+// Pattern: low[3] > high[1] → downward gap
+// Impulse filter: candle 2 must be red with body ≥ IN_FVG_BODY_PCT of range
+float  c2_bear_body  = math.abs(close[2] - open[2])
+float  c2_bear_range = high[2] - low[2]
+bool   c2_bear_ok    = close[2] < open[2] and c2_bear_range > 0 and (c2_bear_body / c2_bear_range) >= IN_FVG_BODY_PCT
+bool   fvg_bear_detected = low[3] > high[1] and c2_bear_ok
+float  fvg_bear_top_px   = low[3]
+float  fvg_bear_bot_px   = high[1]
+float  fvg_bear_width    = fvg_bear_top_px - fvg_bear_bot_px
+float  fvg_bear_ce_px    = (fvg_bear_top_px + fvg_bear_bot_px) / 2.0
+string fvg_bear_gr       = fvg_bear_width >= ATR_VAL ? FVG_GRADE_L :
+                           fvg_bear_width >= ATR_VAL * 0.5 ? FVG_GRADE_M :
+                           FVG_GRADE_S
+
+// Post-sweep: BSL sweep happened recently → bearish FVG
+bool fvg_bear_is_post_sweep = (bar_index - LAST_BSL_SWEEP_BAR) <= IN_FVG_SWEEP_WIN
+
+if fvg_bear_detected and IN_SHOW_FVG and IN_SHOW_FVG_BEAR and fvg_bear_width >= ATR_VAL * IN_FVG_MIN_ATR
+    if array.size(fvg_bear_top) >= 5
+        box.delete(array.shift(fvg_bear_boxes))
+        line.delete(array.shift(fvg_bear_ce_lines))
+        label.delete(array.shift(fvg_bear_labels))
+        array.shift(fvg_bear_top)
+        array.shift(fvg_bear_bot)
+        array.shift(fvg_bear_ce)
+        array.shift(fvg_bear_bar)
+        array.shift(fvg_bear_state)
+        array.shift(fvg_bear_grade)
+        array.shift(fvg_bear_mit_bar)
+        array.shift(fvg_bear_post_sweep)
+
+    int transp = fn_fvg_transp(fvg_bear_gr)
+    color box_color = color.new(IN_FVG_BEAR_COLOR, transp)
+
+    box fvg_bx = box.new(
+         left     = bar_index - 2,
+         top      = fvg_bear_top_px,
+         right    = bar_index + 10,
+         bottom   = fvg_bear_bot_px,
+         bgcolor  = box_color,
+         border_color = color.new(IN_FVG_BEAR_COLOR, transp - 10),
+         border_width = 1)
+
+    line fvg_ce_ln = line.new(
+         x1 = bar_index - 2, y1 = fvg_bear_ce_px,
+         x2 = bar_index + 10, y2 = fvg_bear_ce_px,
+         color  = IN_SHOW_CE ? color.new(IN_FVG_BEAR_COLOR, transp - 20) : COLOR_NONE,
+         width  = 1,
+         style  = line.style_dotted)
+
+    string lbl_prefix = fvg_bear_is_post_sweep ? "★ " : ""
+    label fvg_lb = label.new(
+         x         = bar_index + 8,
+         y         = fvg_bear_top_px,
+         text      = lbl_prefix + "FVG " + fvg_bear_gr,
+         color     = COLOR_NONE,
+         textcolor = IN_FVG_BEAR_COLOR,
+         style     = label.style_label_down,
+         size      = size.small)
+
+    array.push(fvg_bear_top,        fvg_bear_top_px)
+    array.push(fvg_bear_bot,        fvg_bear_bot_px)
+    array.push(fvg_bear_ce,         fvg_bear_ce_px)
+    array.push(fvg_bear_bar,        bar_index)
+    array.push(fvg_bear_state,      FVG_FRESH)
+    array.push(fvg_bear_grade,      fvg_bear_gr)
+    array.push(fvg_bear_mit_bar,    0)
+    array.push(fvg_bear_post_sweep, fvg_bear_is_post_sweep)
+    array.push(fvg_bear_boxes,      fvg_bx)
+    array.push(fvg_bear_ce_lines,   fvg_ce_ln)
+    array.push(fvg_bear_labels,     fvg_lb)
+
+    EVT_FVG_BEAR := true
+
+// ── 13.7 FVG Mitigation Check ────────────────────────────────
+// Bullish FVG: price dips into zone from above
+//   Tested: low[1] <= CE   (touched midpoint)
+//   Mitigated: low[1] <= bottom  (filled entire gap)
+
+int n_fvg_bull_mit = array.size(fvg_bull_top)
+if n_fvg_bull_mit > 0
+    for i = 0 to n_fvg_bull_mit - 1
+        string st = array.get(fvg_bull_state, i)
+        if st == FVG_FRESH
+            float ce  = array.get(fvg_bull_ce, i)
+            float bot = array.get(fvg_bull_bot, i)
+            if low[1] <= bot
+                // Fully mitigated
+                array.set(fvg_bull_state, i, FVG_MITIGATED)
+                array.set(fvg_bull_mit_bar, i, bar_index)
+                box.set_bgcolor(array.get(fvg_bull_boxes, i), IN_FVG_MIT_COLOR)
+                box.set_border_color(array.get(fvg_bull_boxes, i), color.new(#636366, 80))
+                box.set_right(array.get(fvg_bull_boxes, i), bar_index)
+                line.set_x2(array.get(fvg_bull_ce_lines, i), bar_index)
+                line.set_color(array.get(fvg_bull_ce_lines, i), IN_FVG_MIT_COLOR)
+                label.set_textcolor(array.get(fvg_bull_labels, i), color.new(#636366, 50))
+            else if low[1] <= ce
+                // Tested — touched CE but not fully filled
+                array.set(fvg_bull_state, i, FVG_TESTED)
+                box.set_border_color(array.get(fvg_bull_boxes, i), IN_FVG_TEST_COLOR)
+                EVT_FVG_BULL_TEST := true
+
+        else if st == FVG_TESTED
+            float bot = array.get(fvg_bull_bot, i)
+            if low[1] <= bot
+                array.set(fvg_bull_state, i, FVG_MITIGATED)
+                array.set(fvg_bull_mit_bar, i, bar_index)
+                box.set_bgcolor(array.get(fvg_bull_boxes, i), IN_FVG_MIT_COLOR)
+                box.set_border_color(array.get(fvg_bull_boxes, i), color.new(#636366, 80))
+                box.set_right(array.get(fvg_bull_boxes, i), bar_index)
+                line.set_x2(array.get(fvg_bull_ce_lines, i), bar_index)
+                line.set_color(array.get(fvg_bull_ce_lines, i), IN_FVG_MIT_COLOR)
+                label.set_textcolor(array.get(fvg_bull_labels, i), color.new(#636366, 50))
+
+// Bearish FVG: price pushes into zone from below
+//   Tested: high[1] >= CE
+//   Mitigated: high[1] >= top
+int n_fvg_bear_mit = array.size(fvg_bear_top)
+if n_fvg_bear_mit > 0
+    for i = 0 to n_fvg_bear_mit - 1
+        string st = array.get(fvg_bear_state, i)
+        if st == FVG_FRESH
+            float ce  = array.get(fvg_bear_ce, i)
+            float top = array.get(fvg_bear_top, i)
+            if high[1] >= top
+                array.set(fvg_bear_state, i, FVG_MITIGATED)
+                array.set(fvg_bear_mit_bar, i, bar_index)
+                box.set_bgcolor(array.get(fvg_bear_boxes, i), IN_FVG_MIT_COLOR)
+                box.set_border_color(array.get(fvg_bear_boxes, i), color.new(#636366, 80))
+                box.set_right(array.get(fvg_bear_boxes, i), bar_index)
+                line.set_x2(array.get(fvg_bear_ce_lines, i), bar_index)
+                line.set_color(array.get(fvg_bear_ce_lines, i), IN_FVG_MIT_COLOR)
+                label.set_textcolor(array.get(fvg_bear_labels, i), color.new(#636366, 50))
+            else if high[1] >= ce
+                array.set(fvg_bear_state, i, FVG_TESTED)
+                box.set_border_color(array.get(fvg_bear_boxes, i), IN_FVG_TEST_COLOR)
+                EVT_FVG_BEAR_TEST := true
+
+        else if st == FVG_TESTED
+            float top = array.get(fvg_bear_top, i)
+            if high[1] >= top
+                array.set(fvg_bear_state, i, FVG_MITIGATED)
+                array.set(fvg_bear_mit_bar, i, bar_index)
+                box.set_bgcolor(array.get(fvg_bear_boxes, i), IN_FVG_MIT_COLOR)
+                box.set_border_color(array.get(fvg_bear_boxes, i), color.new(#636366, 80))
+                box.set_right(array.get(fvg_bear_boxes, i), bar_index)
+                line.set_x2(array.get(fvg_bear_ce_lines, i), bar_index)
+                line.set_color(array.get(fvg_bear_ce_lines, i), IN_FVG_MIT_COLOR)
+                label.set_textcolor(array.get(fvg_bear_labels, i), color.new(#636366, 50))
+
+// ── 13.8 FVG Expiry ──────────────────────────────────────────
+// Fresh/Tested: expire after IN_FVG_MAX_AGE bars
+// Mitigated: expire after IN_FVG_MIT_EXPIRY bars (or immediately if hidden)
+
+int n_fvg_bull_exp = array.size(fvg_bull_top)
+if n_fvg_bull_exp > 0
+    for i = n_fvg_bull_exp - 1 to 0
+        string st = array.get(fvg_bull_state, i)
+        bool expire = false
+        if st == FVG_MITIGATED
+            expire := not IN_SHOW_FVG_MIT or (bar_index - array.get(fvg_bull_mit_bar, i) > IN_FVG_MIT_EXPIRY)
+        else
+            expire := (bar_index - array.get(fvg_bull_bar, i) > IN_FVG_MAX_AGE)
+        if expire
+            box.delete(array.remove(fvg_bull_boxes, i))
+            line.delete(array.remove(fvg_bull_ce_lines, i))
+            label.delete(array.remove(fvg_bull_labels, i))
+            array.remove(fvg_bull_top, i)
+            array.remove(fvg_bull_bot, i)
+            array.remove(fvg_bull_ce, i)
+            array.remove(fvg_bull_bar, i)
+            array.remove(fvg_bull_state, i)
+            array.remove(fvg_bull_grade, i)
+            array.remove(fvg_bull_mit_bar, i)
+            array.remove(fvg_bull_post_sweep, i)
+
+int n_fvg_bear_exp = array.size(fvg_bear_top)
+if n_fvg_bear_exp > 0
+    for i = n_fvg_bear_exp - 1 to 0
+        string st = array.get(fvg_bear_state, i)
+        bool expire = false
+        if st == FVG_MITIGATED
+            expire := not IN_SHOW_FVG_MIT or (bar_index - array.get(fvg_bear_mit_bar, i) > IN_FVG_MIT_EXPIRY)
+        else
+            expire := (bar_index - array.get(fvg_bear_bar, i) > IN_FVG_MAX_AGE)
+        if expire
+            box.delete(array.remove(fvg_bear_boxes, i))
+            line.delete(array.remove(fvg_bear_ce_lines, i))
+            label.delete(array.remove(fvg_bear_labels, i))
+            array.remove(fvg_bear_top, i)
+            array.remove(fvg_bear_bot, i)
+            array.remove(fvg_bear_ce, i)
+            array.remove(fvg_bear_bar, i)
+            array.remove(fvg_bear_state, i)
+            array.remove(fvg_bear_grade, i)
+            array.remove(fvg_bear_mit_bar, i)
+            array.remove(fvg_bear_post_sweep, i)
+
+// ── 13.9 FVG Position Update (labels + box right edge) ───────
+if barstate.islast
+    int n_fb_lbl = array.size(fvg_bull_labels)
+    if n_fb_lbl > 0
+        for i = 0 to n_fb_lbl - 1
+            if array.get(fvg_bull_state, i) != FVG_MITIGATED
+                label.set_x(array.get(fvg_bull_labels, i), bar_index + 8)
+                box.set_right(array.get(fvg_bull_boxes, i), bar_index + 3)
+                line.set_x2(array.get(fvg_bull_ce_lines, i), bar_index + 3)
+    int n_fbe_lbl = array.size(fvg_bear_labels)
+    if n_fbe_lbl > 0
+        for i = 0 to n_fbe_lbl - 1
+            if array.get(fvg_bear_state, i) != FVG_MITIGATED
+                label.set_x(array.get(fvg_bear_labels, i), bar_index + 8)
+                box.set_right(array.get(fvg_bear_boxes, i), bar_index + 3)
+                line.set_x2(array.get(fvg_bear_ce_lines, i), bar_index + 3)
+
+// ============================================================
+// SECTION 9 — DASHBOARD ENGINE  (updated for v2.2.0)
+// ============================================================
+
+var table DASHBOARD = table.new(
+     fn_table_pos(IN_DASH_POS),
+     columns = 2, rows = 12,
+     bgcolor = COLOR_BG, border_color = COLOR_DIM,
+     border_width = 1, frame_color = COLOR_DIM, frame_width = 1)
+
+dash_row(int row, string label_text, string value, color val_color) =>
+    table.cell(DASHBOARD, 0, row, text = label_text,
+         text_color = COLOR_DIM, text_size = size.small, bgcolor = COLOR_HEADER)
+    table.cell(DASHBOARD, 1, row, text = value,
+         text_color = val_color, text_size = size.small, bgcolor = COLOR_BG)
+
+if IN_SHOW_DASH and barstate.islast
+    table.cell(DASHBOARD, 0, 0,
+         text = "LSS PRO  " + VERSION, text_color = COLOR_WHITE,
+         text_size = size.small, bgcolor = color.new(#0A84FF, 0),
+         text_halign = text.align_center)
+    table.merge_cells(DASHBOARD, 0, 0, 1, 0)
+
+    dash_row(1, "Session",   ACTIVE_SESSION, ACTIVE_SESSION_COLOR)
+    dash_row(2, "HTF",       fn_htf_label(RESOLVED_HTF), COLOR_INFO)
+    dash_row(3, "HTF Close", str.tostring(HTF_CLOSE, format.mintick), COLOR_INFO)
+    dash_row(4, "Trend",     TREND_STATE, TREND_COLOR)
+    dash_row(5, "Context",   MARKET_CONTEXT, CONTEXT_COLOR)
+    dash_row(6, "PDH / PDL",
+         str.tostring(PD_HIGH, format.mintick) + " / " + str.tostring(PD_LOW, format.mintick), COLOR_DIM)
+
+    // Liquidity counts
+    int active_bsl = 0
+    int sz_bsl = array.size(bsl_swept)
+    if sz_bsl > 0
+        for i = 0 to sz_bsl - 1
+            if not array.get(bsl_swept, i)
+                active_bsl += 1
+    int active_ssl = 0
+    int sz_ssl = array.size(ssl_swept)
+    if sz_ssl > 0
+        for i = 0 to sz_ssl - 1
+            if not array.get(ssl_swept, i)
+                active_ssl += 1
+    dash_row(7, "Liq Levels",
+         "BSL " + str.tostring(active_bsl) + "  │  SSL " + str.tostring(active_ssl), COLOR_DIM)
+
+    color sweep_clr = LIQ_LAST_SWEEP == "—" ? COLOR_DIM :
+         str.contains(LIQ_LAST_SWEEP, "BSL") ? IN_BSL_COLOR : IN_SSL_COLOR
+    dash_row(8, "Last Sweep", LIQ_LAST_SWEEP, sweep_clr)
+
+    // FVG counts (NEW in v2.2.0)
+    int fresh_bull = 0
+    int n_fb_dash = array.size(fvg_bull_state)
+    if n_fb_dash > 0
+        for i = 0 to n_fb_dash - 1
+            if array.get(fvg_bull_state, i) != FVG_MITIGATED
+                fresh_bull += 1
+    int fresh_bear = 0
+    int n_fbe_dash = array.size(fvg_bear_state)
+    if n_fbe_dash > 0
+        for i = 0 to n_fbe_dash - 1
+            if array.get(fvg_bear_state, i) != FVG_MITIGATED
+                fresh_bear += 1
+    dash_row(9, "FVG Active",
+         "Bull " + str.tostring(fresh_bull) + "  │  Bear " + str.tostring(fresh_bear),
+         fresh_bull > 0 or fresh_bear > 0 ? COLOR_INFO : COLOR_DIM)
+
+    // Post-sweep FVG indicator
+    bool has_ps_bull = false
+    if array.size(fvg_bull_post_sweep) > 0
+        for i = 0 to array.size(fvg_bull_post_sweep) - 1
+            if array.get(fvg_bull_post_sweep, i) and array.get(fvg_bull_state, i) != FVG_MITIGATED
+                has_ps_bull := true
+                break
+    bool has_ps_bear = false
+    if array.size(fvg_bear_post_sweep) > 0
+        for i = 0 to array.size(fvg_bear_post_sweep) - 1
+            if array.get(fvg_bear_post_sweep, i) and array.get(fvg_bear_state, i) != FVG_MITIGATED
+                has_ps_bear := true
+                break
+    string ps_text = has_ps_bull or has_ps_bear ? "★ Post-Sweep Active" : "—"
+    color  ps_color = has_ps_bull ? COLOR_BULL : has_ps_bear ? COLOR_BEAR : COLOR_DIM
+    dash_row(10, "FVG Quality", ps_text, ps_color)
+
+    dash_row(11, "Status", "Watching…", COLOR_DIM)
+
+// ============================================================
+// SECTION 10 — DEBUG ENGINE  (updated for v2.2.0)
+// ============================================================
+
+var label DEBUG_LABEL = label.new(bar_index, high, "",
+     color = color.new(#1C1C1E, 10), textcolor = COLOR_WHITE,
+     style = label.style_label_left, size = size.normal)
+
+if IN_SHOW_DEBUG and barstate.islast
+    int dbg_bsl = 0
+    int dbg_bsl_sz = array.size(bsl_swept)
+    if dbg_bsl_sz > 0
+        for i = 0 to dbg_bsl_sz - 1
+            if not array.get(bsl_swept, i)
+                dbg_bsl += 1
+    int dbg_ssl = 0
+    int dbg_ssl_sz = array.size(ssl_swept)
+    if dbg_ssl_sz > 0
+        for i = 0 to dbg_ssl_sz - 1
+            if not array.get(ssl_swept, i)
+                dbg_ssl += 1
+
+    int dbg_fvg_bull = array.size(fvg_bull_top)
+    int dbg_fvg_bear = array.size(fvg_bear_top)
+
+    string dbg = "── LSS Pro Debug ──\n" +
+         "Bar        : " + str.tostring(bar_index)          + "\n" +
+         "HTF        : " + RESOLVED_HTF                     + "\n" +
+         "Trend      : " + TREND_STATE                      + "\n" +
+         "Session    : " + ACTIVE_SESSION                   + "\n" +
+         "EMA 50     : " + str.tostring(EMA50,  "#.##")     + "\n" +
+         "EMA 200    : " + str.tostring(EMA200, "#.##")     + "\n" +
+         "PDH        : " + str.tostring(PD_HIGH, "#.##")    + "\n" +
+         "PDL        : " + str.tostring(PD_LOW,  "#.##")    + "\n" +
+         "Context    : " + MARKET_CONTEXT                   + "\n" +
+         "─ Liquidity ─\n" +
+         "BSL Active : " + str.tostring(dbg_bsl)            + " / 5\n" +
+         "SSL Active : " + str.tostring(dbg_ssl)            + " / 5\n" +
+         "Last Sweep : " + LIQ_LAST_SWEEP                   + "\n" +
+         "─ FVG ─\n" +
+         "Bull FVGs  : " + str.tostring(dbg_fvg_bull)       + " / 5\n" +
+         "Bear FVGs  : " + str.tostring(dbg_fvg_bear)       + " / 5\n" +
+         "ATR(14)    : " + str.tostring(ATR_VAL, "#.##")    + "\n" +
+         "Min Width  : " + str.tostring(ATR_VAL * IN_FVG_MIN_ATR, "#.##")
+
+    label.set_xy(DEBUG_LABEL, bar_index + 2, high)
+    label.set_text(DEBUG_LABEL, dbg)
+
+if not IN_SHOW_DEBUG
+    label.set_text(DEBUG_LABEL, "")
+
+// ============================================================
+// SECTION 11 — ALERT ENGINE  (updated for v2.2.0)
+// ============================================================
+
+alertcondition(TREND_CHANGED,
+     title = "LSS Pro — Trend Change",
+     message = "LSS Pro | Trend: {{plot_0}} | {{ticker}} {{interval}}")
+
+bool SESSION_CHANGED = ACTIVE_SESSION != ACTIVE_SESSION[1]
+alertcondition(SESSION_CHANGED,
+     title = "LSS Pro — Session Change",
+     message = "LSS Pro | Session changed | {{ticker}} {{interval}}")
+
+alertcondition(EVT_BSL_SWEPT,
+     title = "LSS Pro — Buyside Liquidity Swept",
+     message = "LSS Pro | BSL SWEPT — Bearish Setup | {{ticker}} {{interval}}")
+
+alertcondition(EVT_SSL_SWEPT,
+     title = "LSS Pro — Sellside Liquidity Swept",
+     message = "LSS Pro | SSL SWEPT — Bullish Setup | {{ticker}} {{interval}}")
+
+// FVG Alerts (NEW in v2.2.0)
+alertcondition(EVT_FVG_BULL,
+     title = "LSS Pro — Bullish FVG Formed",
+     message = "LSS Pro | Bullish FVG detected | {{ticker}} {{interval}}")
+
+alertcondition(EVT_FVG_BEAR,
+     title = "LSS Pro — Bearish FVG Formed",
+     message = "LSS Pro | Bearish FVG detected | {{ticker}} {{interval}}")
+
+alertcondition(EVT_FVG_BULL_TEST,
+     title = "LSS Pro — Bullish FVG Tested",
+     message = "LSS Pro | Price testing Bullish FVG | {{ticker}} {{interval}}")
+
+alertcondition(EVT_FVG_BEAR_TEST,
+     title = "LSS Pro — Bearish FVG Tested",
+     message = "LSS Pro | Price testing Bearish FVG | {{ticker}} {{interval}}")
+
+// ============================================================
+// END OF FILE — LSS Pro v2.2.0
+// Commit: feat: build LSS Pro v2.2.0 FVG engine
+// Next  : v2.3.0 — Market Structure Engine (BOS / CHOCH)
+// ============================================================
