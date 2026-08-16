@@ -47,7 +47,7 @@
 
 //@version=6
 indicator(
-     title            = "LSS Pro v2.7.1",
+     title            = "LSS Pro v3.0.0",
      shorttitle       = "LSS Pro",
      overlay          = true,
      max_labels_count = 100,
@@ -59,12 +59,20 @@ indicator(
 // SECTION 1 — CONSTANTS
 // ============================================================
 
-string VERSION = "v2.7.1"
+string VERSION = "v3.0.0"
 
-// Trend States
+// Trend States (EMA — visual only in v3.0.0, kept for EMA plots)
 string TREND_BULL    = "Bullish"
 string TREND_BEAR    = "Bearish"
 string TREND_NEUTRAL = "Neutral"
+
+// HTF Structure Bias States (v3.0.0 — replaces EMA crossover for scoring)
+// HTF_BIAS_BULL : HTF has made a confirmed break above last swing high
+// HTF_BIAS_BEAR : HTF has made a confirmed break below last swing low
+// HTF_BIAS_NONE : Not enough HTF bars to confirm structure yet
+string HTF_BIAS_BULL = "Bullish"
+string HTF_BIAS_BEAR = "Bearish"
+string HTF_BIAS_NONE = "—"
 
 // Context States
 string CTX_ABOVE  = "Above PDH"
@@ -443,19 +451,220 @@ string RESOLVED_HTF = IN_HTF_AUTO ? fn_resolve_htf() : IN_HTF_MANUAL
          lookahead = barmerge.lookahead_off)
 
 // ============================================================
-// SECTION 6 — TREND ENGINE
+// SECTION 6 — HTF STRUCTURE ENGINE  (v3.0.0)
+// ============================================================
+// Architecture:
+//   Replaces the EMA 50/200 crossover proxy with real HTF swing
+//   high / swing low structure. RESOLVED_HTF is already set in
+//   Section 4 (auto or manual). HTF OHLC is already pulled there.
+//
+//   Method:
+//     • Pull ta.pivothigh / ta.pivotlow on the HTF via request.security.
+//     • Track the most-recent confirmed HTF swing high (HTF_LAST_SH)
+//       and swing low (HTF_LAST_SL) on the LTF chart.
+//     • Determine HTF_BIAS:
+//         Bullish — HTF close has broken ABOVE HTF_LAST_SH
+//         Bearish — HTF close has broken BELOW HTF_LAST_SL
+//         Neutral — structure not yet established or equal
+//
+//   Pivot left/right legs = 3 bars each on the HTF.
+//   This gives reliable, non-repainting HTF structure.
+//
+//   EMA 50 / 200 are retained for visual reference only.
+//   They no longer drive any scoring logic.
+//
+// Outputs:
+//   HTF_LAST_SH   — price of last confirmed HTF swing high
+//   HTF_LAST_SL   — price of last confirmed HTF swing low
+//   HTF_BIAS      — "Bullish" / "Bearish" / "—"
+//   HTF_BIAS_COLOR — display colour
+//   HTF_BIAS_CHANGED — true on the bar HTF_BIAS flips
 // ============================================================
 
+// ── 6.1 Pull HTF pivot highs and lows ────────────────────────
+// Pine v6: request.security with a tuple expression.
+// lookahead_off → no future leak; pivots confirm 3 bars after the pivot bar.
+[htf_ph_raw, htf_pl_raw] = request.security(
+     syminfo.tickerid, RESOLVED_HTF,
+     [ta.pivothigh(high, 3, 3), ta.pivotlow(low, 3, 3)],
+     lookahead = barmerge.lookahead_off)
+
+// ── 6.2 Track last confirmed HTF swing high / low ─────────────
+// var preserves value across LTF bars — only updates when a new
+// HTF pivot fires (non-na value arrives).
+var float HTF_LAST_SH = na
+var float HTF_LAST_SL = na
+
+if not na(htf_ph_raw)
+    HTF_LAST_SH := htf_ph_raw
+if not na(htf_pl_raw)
+    HTF_LAST_SL := htf_pl_raw
+
+// ── 6.3 Derive HTF bias from structure breaks ─────────────────
+// A bullish bias is established when HTF close exceeds the last SH.
+// A bearish bias is established when HTF close falls below the last SL.
+// If neither condition is met (e.g. first few bars, sideways), bias = none.
+string HTF_BIAS =
+     not na(HTF_LAST_SH) and HTF_CLOSE > HTF_LAST_SH ? HTF_BIAS_BULL :
+     not na(HTF_LAST_SL) and HTF_CLOSE < HTF_LAST_SL ? HTF_BIAS_BEAR :
+     HTF_BIAS_NONE
+
+color HTF_BIAS_COLOR =
+     HTF_BIAS == HTF_BIAS_BULL ? COLOR_BULL :
+     HTF_BIAS == HTF_BIAS_BEAR ? COLOR_BEAR :
+     COLOR_DIM
+
+bool HTF_BIAS_CHANGED = HTF_BIAS != HTF_BIAS[1]
+
+// ── 6.4 EMA 50 / 200 — visual reference only (v3.0.0) ─────────
+// These no longer feed into scoring. Kept so traders can still
+// display them as an optional reference overlay.
 float EMA50  = ta.ema(close, EMA_FAST_LEN)
 float EMA200 = ta.ema(close, EMA_SLOW_LEN)
 
-string TREND_STATE =
-     EMA50 > EMA200 ? TREND_BULL :
-     EMA50 < EMA200 ? TREND_BEAR :
-     TREND_NEUTRAL
+// TREND_STATE kept as a passthrough alias for the debug label and
+// alert condition — mapped from HTF_BIAS so no downstream breakage.
+string TREND_STATE   = HTF_BIAS
+color  TREND_COLOR   = HTF_BIAS_COLOR
+bool   TREND_CHANGED = HTF_BIAS_CHANGED
 
-color TREND_COLOR   = fn_trend_color(TREND_STATE)
-bool  TREND_CHANGED = TREND_STATE != TREND_STATE[1]
+// ATR(14) — declared here so both Section 6B and Section 13 can reference it
+float ATR_VAL = ta.atr(14)
+
+// ============================================================
+// SECTION 6B — HTF FVG & ORDER BLOCK ENGINE  (v3.0.0)
+// ============================================================
+// Architecture:
+//   Detects FVGs and Order Blocks on the higher timeframe using
+//   the same 3-candle logic as Section 13, but applied to HTF
+//   OHLC bars already pulled via request.security in Section 4.
+//
+//   HTF FVG (Fair Value Gap):
+//     Bull HTF FVG: HTF_HIGH[2] < HTF_LOW[0]  → upward gap
+//     Bear HTF FVG: HTF_LOW[2]  > HTF_HIGH[0] → downward gap
+//     CE = midpoint of the gap zone
+//
+//   HTF Order Block (OB):
+//     Bull HTF OB: last bearish HTF candle before a bull HTF FVG forms
+//     Bear HTF OB: last bullish HTF candle before a bear HTF FVG forms
+//     Zone = candle body (open → close)
+//
+//   Detection fires on the LTF bar where the HTF pattern completes.
+//   request.security already provides confirmed HTF bars — no repaint.
+//
+//   Mitigation: price crosses the CE of the HTF FVG → Tested
+//               price fills the entire HTF FVG → Mitigated
+//               price closes through the HTF OB body → Mitigated
+//
+// Outputs (used by Section 15 scoring and Section 9 dashboard):
+//   HTF_FVG_BULL_ACTIVE  — an unmitigated bullish HTF FVG exists
+//   HTF_FVG_BULL_CE_NEAR — current price is within 0.5×ATR of bull CE
+//   HTF_FVG_BEAR_ACTIVE  — an unmitigated bearish HTF FVG exists
+//   HTF_FVG_BEAR_CE_NEAR — current price is within 0.5×ATR of bear CE
+//   HTF_OB_BULL_ACTIVE   — an unmitigated bullish HTF OB zone exists
+//   HTF_OB_BULL_NEAR     — price is inside or touching the bull HTF OB
+//   HTF_OB_BEAR_ACTIVE   — an unmitigated bearish HTF OB zone exists
+//   HTF_OB_BEAR_NEAR     — price is inside or touching the bear HTF OB
+// ============================================================
+
+// ── 6B.1 HTF FVG Detection ───────────────────────────────────
+// Use HTF bars already fetched in Section 4: HTF_HIGH, HTF_LOW, HTF_CLOSE, HTF_OPEN
+// [0] = current HTF bar, [1] = previous, [2] = bar before that
+// Pattern fires when the current HTF bar completes the 3-candle gap.
+
+bool htf_fvg_bull_detected = HTF_HIGH[2] < HTF_LOW[0]  and HTF_CLOSE[1] > HTF_OPEN[1]
+bool htf_fvg_bear_detected = HTF_LOW[2]  > HTF_HIGH[0] and HTF_CLOSE[1] < HTF_OPEN[1]
+
+// Only fire on the bar where HTF values change (new HTF candle completed)
+bool htf_bar_changed = HTF_CLOSE != HTF_CLOSE[1]
+
+// ── 6B.2 HTF FVG State Storage (1 active FVG per side, FIFO) ──
+var float  HTF_FVG_BULL_TOP   = na  // low[0] of the HTF pattern
+var float  HTF_FVG_BULL_BOT   = na  // high[2] of the HTF pattern
+var float  HTF_FVG_BULL_CE    = na  // midpoint
+var string HTF_FVG_BULL_STATE = "None"
+var float  HTF_FVG_BULL_OB_TOP = na  // HTF OB body top (bull OB = last bear HTF candle open)
+var float  HTF_FVG_BULL_OB_BOT = na  // HTF OB body bottom (close of that bear candle)
+
+var float  HTF_FVG_BEAR_TOP   = na
+var float  HTF_FVG_BEAR_BOT   = na
+var float  HTF_FVG_BEAR_CE    = na
+var string HTF_FVG_BEAR_STATE = "None"
+var float  HTF_FVG_BEAR_OB_TOP = na  // HTF OB body top (bull HTF candle close)
+var float  HTF_FVG_BEAR_OB_BOT = na  // HTF OB body bottom (bull HTF candle open)
+
+// ── 6B.3 Register new HTF FVGs when a fresh HTF bar arrives ──
+if htf_bar_changed and htf_fvg_bull_detected
+    HTF_FVG_BULL_TOP   := HTF_LOW[0]
+    HTF_FVG_BULL_BOT   := HTF_HIGH[2]
+    HTF_FVG_BULL_CE    := (HTF_LOW[0] + HTF_HIGH[2]) / 2.0
+    HTF_FVG_BULL_STATE := FVG_FRESH
+    // HTF OB = candle[2] search: last bearish HTF candle before the gap
+    // We approximate using HTF_OPEN[2]/HTF_CLOSE[2] — the gap initiator bar
+    if HTF_CLOSE[2] < HTF_OPEN[2]
+        HTF_FVG_BULL_OB_TOP := HTF_OPEN[2]
+        HTF_FVG_BULL_OB_BOT := HTF_CLOSE[2]
+    else
+        // impulse bar was bullish — OB is not meaningful, clear it
+        HTF_FVG_BULL_OB_TOP := na
+        HTF_FVG_BULL_OB_BOT := na
+
+if htf_bar_changed and htf_fvg_bear_detected
+    // Bear HTF FVG: HTF_LOW[2] > HTF_HIGH[0] → gap between low of bar[2] and high of bar[0]
+    HTF_FVG_BEAR_TOP   := HTF_LOW[2]   // bottom of bar[2] — top of the gap zone
+    HTF_FVG_BEAR_BOT   := HTF_HIGH[0]  // top of bar[0]  — bottom of the gap zone
+    HTF_FVG_BEAR_CE    := (HTF_LOW[2] + HTF_HIGH[0]) / 2.0
+    HTF_FVG_BEAR_STATE := FVG_FRESH
+    // HTF OB = last bullish HTF candle — use bar[2] as initiator
+    if HTF_CLOSE[2] > HTF_OPEN[2]
+        HTF_FVG_BEAR_OB_TOP := HTF_CLOSE[2]
+        HTF_FVG_BEAR_OB_BOT := HTF_OPEN[2]
+    else
+        HTF_FVG_BEAR_OB_TOP := na
+        HTF_FVG_BEAR_OB_BOT := na
+
+// ── 6B.4 HTF FVG State Updates (CE touch / Mitigation) ───────
+// Check on every LTF bar whether price has interacted with the HTF FVG zones.
+
+if HTF_FVG_BULL_STATE != "None" and HTF_FVG_BULL_STATE != FVG_MITIGATED
+    if not na(HTF_FVG_BULL_CE) and low <= HTF_FVG_BULL_CE
+        HTF_FVG_BULL_STATE := FVG_CE_TOUCH
+    if not na(HTF_FVG_BULL_BOT) and low <= HTF_FVG_BULL_BOT
+        HTF_FVG_BULL_STATE := FVG_MITIGATED  // fully filled
+
+if HTF_FVG_BEAR_STATE != "None" and HTF_FVG_BEAR_STATE != FVG_MITIGATED
+    if not na(HTF_FVG_BEAR_CE) and high >= HTF_FVG_BEAR_CE
+        HTF_FVG_BEAR_STATE := FVG_CE_TOUCH
+    if not na(HTF_FVG_BEAR_TOP) and high >= HTF_FVG_BEAR_TOP
+        HTF_FVG_BEAR_STATE := FVG_MITIGATED
+
+// HTF OB mitigation — price closes through the OB body
+if not na(HTF_FVG_BULL_OB_BOT) and close < HTF_FVG_BULL_OB_BOT
+    HTF_FVG_BULL_OB_TOP := na
+    HTF_FVG_BULL_OB_BOT := na
+
+if not na(HTF_FVG_BEAR_OB_TOP) and close > HTF_FVG_BEAR_OB_TOP
+    HTF_FVG_BEAR_OB_TOP := na
+    HTF_FVG_BEAR_OB_BOT := na
+
+// ── 6B.5 Derived Output Booleans (consumed by Section 15) ────
+bool HTF_FVG_BULL_ACTIVE  = HTF_FVG_BULL_STATE != "None" and HTF_FVG_BULL_STATE != FVG_MITIGATED
+bool HTF_FVG_BEAR_ACTIVE  = HTF_FVG_BEAR_STATE != "None" and HTF_FVG_BEAR_STATE != FVG_MITIGATED
+bool HTF_FVG_BULL_CE_NEAR = HTF_FVG_BULL_ACTIVE and not na(HTF_FVG_BULL_CE) and
+     math.abs(close - HTF_FVG_BULL_CE) <= ATR_VAL * 0.5
+bool HTF_FVG_BEAR_CE_NEAR = HTF_FVG_BEAR_ACTIVE and not na(HTF_FVG_BEAR_CE) and
+     math.abs(close - HTF_FVG_BEAR_CE) <= ATR_VAL * 0.5
+
+bool HTF_OB_BULL_ACTIVE = not na(HTF_FVG_BULL_OB_TOP) and not na(HTF_FVG_BULL_OB_BOT)
+bool HTF_OB_BEAR_ACTIVE = not na(HTF_FVG_BEAR_OB_TOP) and not na(HTF_FVG_BEAR_OB_BOT)
+bool HTF_OB_BULL_NEAR   = HTF_OB_BULL_ACTIVE and
+     low  <= HTF_FVG_BULL_OB_TOP and high >= HTF_FVG_BULL_OB_BOT
+bool HTF_OB_BEAR_NEAR   = HTF_OB_BEAR_ACTIVE and
+     low  <= HTF_FVG_BEAR_OB_TOP and high >= HTF_FVG_BEAR_OB_BOT
+
+// ── 6B.6 HTF FVG Visuals — intentionally omitted ─────────────
+// HTF FVGs span many LTF candles and are confusing as chart drawings.
+// All HTF context is surfaced via the dashboard (rows 6–7) and scoring only.
 
 // ============================================================
 // SECTION 7 — CONTEXT ENGINE
@@ -979,8 +1188,7 @@ plotshape(EVT_SSL_SWEPT, title = "SSL Swept",
 // ============================================================
 
 // ── 12.5.1 ATR + Volume SMA pre-computed here ────────────────
-// ATR_VAL is declared in Section 13 — we need a local copy here
-// since 12.5 runs before 13. We use the same length (14).
+// ATR_VAL is declared above Section 6B — available here.
 // VolSMA is already computed in Section 14 as CONF_VOL_SMA,
 // but Section 14 runs after us — compute a local copy.
 float DISP_ATR    = ta.atr(14)
@@ -1039,8 +1247,7 @@ string DISP_DIR = DISP_GRADE == DISP_NONE ? "—" : close[1] >= open[1] ? "Bull"
 //   EVT_FVG_BEAR_TEST  — true when price enters a bear FVG zone
 // ============================================================
 
-// ── 13.1 ATR for quality grading ─────────────────────────────
-float ATR_VAL = ta.atr(14)
+// ── 13.1 ATR — declared above Section 6B, referenced here ───
 
 // ── 13.2 State Arrays — Bullish FVG ─────────────────────────
 var array<float>  fvg_bull_top       = array.new<float>()   // low[1] — top of gap
@@ -2224,10 +2431,10 @@ if STRUCTURE_BIAS == MS_BIAS_BULL
 if STRUCTURE_BIAS == MS_BIAS_BEAR
     bear_score += 10
 
-// HTF trend alignment (+15)
-if TREND_STATE == TREND_BULL
+// HTF structure alignment (+15)  — v3.0.0: real HTF swing bias, not EMA proxy
+if HTF_BIAS == HTF_BIAS_BULL
     bull_score += 15
-if TREND_STATE == TREND_BEAR
+if HTF_BIAS == HTF_BIAS_BEAR
     bear_score += 15
 
 // Active session (+5) — base points for being in any session
@@ -2315,6 +2522,22 @@ if array.size(ob_bear_top) > 0
                 break
 if ob_bear_near
     bear_score += 10
+
+// HTF FVG confluence (+20 CE near, +10 active) — v3.0.0
+// When price is near the CE of a higher-timeframe FVG, this is the
+// highest-quality entry location in the ICT framework.
+if HTF_FVG_BULL_ACTIVE
+    bull_score += HTF_FVG_BULL_CE_NEAR ? 20 : 10
+if HTF_FVG_BEAR_ACTIVE
+    bear_score += HTF_FVG_BEAR_CE_NEAR ? 20 : 10
+
+// HTF Order Block confluence (+15) — v3.0.0
+// Price touching an HTF OB zone is an institutional defence area.
+// Adds significant weight — HTF OBs are the origin of major moves.
+if HTF_OB_BULL_NEAR
+    bull_score += 15
+if HTF_OB_BEAR_NEAR
+    bear_score += 15
 
 // Fibonacci OTE Zone (+10 price in zone, +15 FVG CE in zone, +25 both)
 // OTE = 61.8–78.6% retracement — institutional reload zone
@@ -3065,7 +3288,7 @@ if barstate.islast and IN_SHOW_TRADE
 
 var table DASHBOARD = table.new(
      fn_table_pos(IN_DASH_POS),
-     columns = 2, rows = 26,
+     columns = 2, rows = 28,
      bgcolor = COLOR_BG, border_color = COLOR_DIM,
      border_width = 1, frame_color = COLOR_DIM, frame_width = 1)
 
@@ -3094,11 +3317,38 @@ if IN_SHOW_DASH and barstate.islast
          NEWS_PHASE + "  " + NEWS_EVENT
     dash_row(2, "News", news_txt, news_clr)
 
-    dash_row(3, "HTF",       fn_htf_label(RESOLVED_HTF), COLOR_INFO)
-    dash_row(4, "HTF Close", str.tostring(HTF_CLOSE, format.mintick), COLOR_INFO)
-    dash_row(5, "Trend",     TREND_STATE, TREND_COLOR)
-    dash_row(6, "Context",   MARKET_CONTEXT, CONTEXT_COLOR)
-    dash_row(7, "PDH / PDL",
+    dash_row(3, "HTF",        fn_htf_label(RESOLVED_HTF), COLOR_INFO)
+    dash_row(4, "HTF Bias",   HTF_BIAS, HTF_BIAS_COLOR)
+    string htf_sh_str = na(HTF_LAST_SH) ? "—" : str.tostring(HTF_LAST_SH, format.mintick)
+    string htf_sl_str = na(HTF_LAST_SL) ? "—" : str.tostring(HTF_LAST_SL, format.mintick)
+    dash_row(5, "HTF SH/SL",  htf_sh_str + " / " + htf_sl_str, COLOR_DIM)
+
+    // HTF FVG row — show active state + CE proximity
+    string htf_fvg_txt =
+         HTF_FVG_BULL_CE_NEAR ? "Bull ▲ @ CE" :
+         HTF_FVG_BULL_ACTIVE  ? "Bull ▲ Active" :
+         HTF_FVG_BEAR_CE_NEAR ? "Bear ▼ @ CE" :
+         HTF_FVG_BEAR_ACTIVE  ? "Bear ▼ Active" : "—"
+    color htf_fvg_clr =
+         HTF_FVG_BULL_CE_NEAR or HTF_FVG_BULL_ACTIVE ? COLOR_BULL :
+         HTF_FVG_BEAR_CE_NEAR or HTF_FVG_BEAR_ACTIVE ? COLOR_BEAR :
+         COLOR_DIM
+    dash_row(6, "HTF FVG", htf_fvg_txt, htf_fvg_clr)
+
+    // HTF OB row
+    string htf_ob_txt =
+         HTF_OB_BULL_NEAR ? "Bull ▲ In Zone" :
+         HTF_OB_BEAR_NEAR ? "Bear ▼ In Zone" :
+         HTF_OB_BULL_ACTIVE ? "Bull ▲ Above" :
+         HTF_OB_BEAR_ACTIVE ? "Bear ▼ Below" : "—"
+    color htf_ob_clr =
+         HTF_OB_BULL_NEAR ? COLOR_BULL :
+         HTF_OB_BEAR_NEAR ? COLOR_BEAR :
+         (HTF_OB_BULL_ACTIVE or HTF_OB_BEAR_ACTIVE) ? COLOR_NEUTRAL :
+         COLOR_DIM
+    dash_row(7, "HTF OB", htf_ob_txt, htf_ob_clr)
+    dash_row(8, "Context",   MARKET_CONTEXT, CONTEXT_COLOR)
+    dash_row(9, "PDH / PDL",
          str.tostring(PD_HIGH, format.mintick) + " / " + str.tostring(PD_LOW, format.mintick), COLOR_DIM)
 
     // Liquidity counts
@@ -3114,12 +3364,12 @@ if IN_SHOW_DASH and barstate.islast
         for i = 0 to sz_ssl - 1
             if not array.get(ssl_swept, i)
                 active_ssl += 1
-    dash_row(8, "Liq Levels",
+    dash_row(10, "Liq Levels",
          "BSL " + str.tostring(active_bsl) + "  │  SSL " + str.tostring(active_ssl), COLOR_DIM)
 
     color sweep_clr = LIQ_LAST_SWEEP == "—" ? COLOR_DIM :
          str.contains(LIQ_LAST_SWEEP, "BSL") ? IN_BSL_COLOR : IN_SSL_COLOR
-    dash_row(9, "Last Sweep", LIQ_LAST_SWEEP, sweep_clr)
+    dash_row(11, "Last Sweep", LIQ_LAST_SWEEP, sweep_clr)
 
     // FVG counts
     int fresh_bull = 0
@@ -3134,7 +3384,7 @@ if IN_SHOW_DASH and barstate.islast
         for i = 0 to n_fbe_dash - 1
             if array.get(fvg_bear_state, i) != FVG_MITIGATED
                 fresh_bear += 1
-    dash_row(10, "FVG Active",
+    dash_row(12, "FVG Active",
          "Bull " + str.tostring(fresh_bull) + "  │  Bear " + str.tostring(fresh_bear),
          fresh_bull > 0 or fresh_bear > 0 ? COLOR_INFO : COLOR_DIM)
 
@@ -3169,7 +3419,7 @@ if IN_SHOW_DASH and barstate.islast
          (LAST_SSL_GRADE == SWEEP_A ? "SSL-A" : LAST_SSL_GRADE == SWEEP_B ? "SSL-B" : "SSL-C") +
          " / " +
          (LAST_BSL_GRADE == SWEEP_A ? "BSL-A" : LAST_BSL_GRADE == SWEEP_B ? "BSL-B" : "BSL-C")
-    dash_row(11, "FVG Quality", fvg_qual_bull + "  │  " + fvg_qual_bear, fvg_qual_clr)
+    dash_row(13, "FVG Quality", fvg_qual_bull + "  │  " + fvg_qual_bear, fvg_qual_clr)
 
     // Order Blocks
     int active_ob_bull = 0
@@ -3184,14 +3434,14 @@ if IN_SHOW_DASH and barstate.islast
         for i = 0 to n_ob_be_dash - 1
             if array.get(ob_bear_state, i) != FVG_MITIGATED
                 active_ob_bear += 1
-    dash_row(12, "OB Active",
+    dash_row(14, "OB Active",
          "Bull " + str.tostring(active_ob_bull) + "  │  Bear " + str.tostring(active_ob_bear),
          active_ob_bull > 0 or active_ob_bear > 0 ? COLOR_INFO : COLOR_DIM)
 
     // Market Structure (NEW in v2.3.0)
     color ms_bias_clr = STRUCTURE_BIAS == MS_BIAS_BULL ? COLOR_BULL :
          STRUCTURE_BIAS == MS_BIAS_BEAR ? COLOR_BEAR : COLOR_DIM
-    dash_row(13, "Structure", STRUCTURE_BIAS, ms_bias_clr)
+    dash_row(15, "Structure", STRUCTURE_BIAS, ms_bias_clr)
 
     // Last structure break
     string ms_last_break = "—"
@@ -3202,7 +3452,7 @@ if IN_SHOW_DASH and barstate.islast
         string ld = array.get(ms_dir, n_ms_dash - 1)
         ms_last_break := lt + " " + ld
         ms_last_clr := ld == "Bull" ? COLOR_BULL : COLOR_BEAR
-    dash_row(14, "Last Break", ms_last_break, ms_last_clr)
+    dash_row(16, "Last Break", ms_last_break, ms_last_clr)
 
     // Confluence Scoring (NEW in v2.4.0)
     color score_clr = conf_score >= 101 ? color.new(#00E676, 0) :
@@ -3210,7 +3460,7 @@ if IN_SHOW_DASH and barstate.islast
          conf_score >= 61  ? COLOR_INFO :
          conf_score >= 41  ? COLOR_NEUTRAL :
          COLOR_DIM
-    dash_row(15, "Score",
+    dash_row(17, "Score",
          str.tostring(conf_score) + " / 225  " + star_display, score_clr)
 
     // OTE Zone row (v2.7.0)
@@ -3219,14 +3469,14 @@ if IN_SHOW_DASH and barstate.islast
          (IN_OTE_ZONE ? " ★IN" : "") + (FVG_CE_IN_OTE ? " FVG✓" : "")
     color ote_clr = FVG_CE_IN_OTE ? COLOR_NEUTRAL :
          IN_OTE_ZONE ? COLOR_INFO : COLOR_DIM
-    dash_row(16, "OTE Zone", ote_txt, ote_clr)
+    dash_row(18, "OTE Zone", ote_txt, ote_clr)
 
     color sig_clr = conf_dir == "Bull" ? COLOR_BULL : conf_dir == "Bear" ? COLOR_BEAR : COLOR_DIM
     string sig_text = conf_signal_bull ? "▲ BULL SETUP" :
          conf_signal_bear ? "▼ BEAR SETUP" : "No Signal"
-    dash_row(17, "Signal", sig_text, sig_clr)
+    dash_row(19, "Signal", sig_text, sig_clr)
 
-    dash_row(18, "RSI", str.tostring(CONF_RSI, "#.#") +
+    dash_row(20, "RSI", str.tostring(CONF_RSI, "#.#") +
          (rsi_ob ? " (OB)" : rsi_os ? " (OS)" : ""), COLOR_INFO)
 
     // Trade Management (v2.6.0 Setup Lifecycle)
@@ -3240,25 +3490,25 @@ if IN_SHOW_DASH and barstate.islast
          TRADE_STATE == SETUP_EXPIRED ? COLOR_DIM :
          TRADE_STATE == SETUP_INVALIDATED ? COLOR_BEAR :
          COLOR_DIM
-    dash_row(19, "Trade", TRADE_STATE, trade_state_clr)
+    dash_row(21, "Trade", TRADE_STATE, trade_state_clr)
 
     string trade_dir_text = TRADE_DIR == "Bull" ? "▲ LONG" : TRADE_DIR == "Bear" ? "▼ SHORT" : "—"
     color  trade_dir_clr  = TRADE_DIR == "Bull" ? COLOR_BULL : TRADE_DIR == "Bear" ? COLOR_BEAR : COLOR_DIM
-    dash_row(20, "Direction", trade_dir_text, trade_dir_clr)
+    dash_row(22, "Direction", trade_dir_text, trade_dir_clr)
 
     string entry_text = not na(TRADE_ENTRY) and has_setup ? str.tostring(TRADE_ENTRY, format.mintick) : "—"
-    dash_row(21, "Entry", entry_text, TRADE_STATE == SETUP_PENDING ? IN_PENDING_COLOR : IN_ENTRY_COLOR)
+    dash_row(23, "Entry", entry_text, TRADE_STATE == SETUP_PENDING ? IN_PENDING_COLOR : IN_ENTRY_COLOR)
 
     string sl_text = not na(TRADE_SL) and has_setup ?
          str.tostring(TRADE_SL, format.mintick) : "—"
     string tp_text = not na(TRADE_TP1) and has_setup ?
          str.tostring(TRADE_TP1, format.mintick) + " / " + str.tostring(TRADE_TP2, format.mintick) : "—"
-    dash_row(22, "SL", sl_text, IN_SL_COLOR)
-    dash_row(23, "TP1 / TP2", tp_text, IN_TP_COLOR)
+    dash_row(24, "SL", sl_text, IN_SL_COLOR)
+    dash_row(25, "TP1 / TP2", tp_text, IN_TP_COLOR)
 
     string rr_text = not na(TRADE_RISK) and has_setup ?
          "1:" + str.tostring(IN_TRADE_TP2_RR, "#.#") + "  Risk " + str.tostring(TRADE_RISK, format.mintick) : "—"
-    dash_row(24, "R:R", rr_text, COLOR_INFO)
+    dash_row(26, "R:R", rr_text, COLOR_INFO)
 
     // Two-score model: Setup Score (at creation) + Entry Score (at CE)
     string score_s = has_setup ? str.tostring(SETUP_SCORE_VAL) : "—"
@@ -3266,7 +3516,7 @@ if IN_SHOW_DASH and barstate.islast
     string scores_text = score_s + " → " + score_e
     color  scores_clr = ENTRY_SCORE_VAL >= IN_ENTRY_MIN_SCORE ? COLOR_BULL :
          SETUP_SCORE_VAL > 0 ? IN_PENDING_COLOR : COLOR_DIM
-    dash_row(25, "Setup → Entry", scores_text, scores_clr)
+    dash_row(27, "Setup → Entry", scores_text, scores_clr)
 
 // ============================================================
 // SECTION 10 — DEBUG ENGINE  (updated for v2.6.0)
@@ -3296,10 +3546,16 @@ if IN_SHOW_DEBUG and barstate.islast
     string dbg = "── LSS Pro Debug ──\n" +
          "Bar        : " + str.tostring(bar_index)          + "\n" +
          "HTF        : " + RESOLVED_HTF                     + "\n" +
-         "Trend      : " + TREND_STATE                      + "\n" +
-         "Session    : " + ACTIVE_SESSION                   + "\n" +
-         "EMA 50     : " + str.tostring(EMA50,  "#.##")     + "\n" +
-         "EMA 200    : " + str.tostring(EMA200, "#.##")     + "\n" +
+         "HTF Bias   : " + HTF_BIAS                                               + "\n" +
+         "HTF Last SH: " + (na(HTF_LAST_SH) ? "—" : str.tostring(HTF_LAST_SH, "#.##")) + "\n" +
+         "HTF Last SL: " + (na(HTF_LAST_SL) ? "—" : str.tostring(HTF_LAST_SL, "#.##")) + "\n" +
+         "HTF FVG B  : " + HTF_FVG_BULL_STATE + (HTF_FVG_BULL_CE_NEAR ? " ★CE" : "") + "\n" +
+         "HTF FVG S  : " + HTF_FVG_BEAR_STATE + (HTF_FVG_BEAR_CE_NEAR ? " ★CE" : "") + "\n" +
+         "HTF OB Bull: " + (HTF_OB_BULL_NEAR ? "In Zone" : HTF_OB_BULL_ACTIVE ? "Active" : "—") + "\n" +
+         "HTF OB Bear: " + (HTF_OB_BEAR_NEAR ? "In Zone" : HTF_OB_BEAR_ACTIVE ? "Active" : "—") + "\n" +
+         "Session    : " + ACTIVE_SESSION                                        + "\n" +
+         "EMA 50     : " + str.tostring(EMA50,  "#.##")                         + "\n" +
+         "EMA 200    : " + str.tostring(EMA200, "#.##")                         + "\n" +
          "PDH        : " + str.tostring(PD_HIGH, "#.##")    + "\n" +
          "PDL        : " + str.tostring(PD_LOW,  "#.##")    + "\n" +
          "Context    : " + MARKET_CONTEXT                   + "\n" +
@@ -3480,6 +3736,6 @@ alertcondition(EVT_DISP_BEAR,
      message = "LSS Pro | Bearish displacement detected | {{ticker}} {{interval}}")
 
 // ============================================================
-// END OF FILE — LSS Pro v2.7.1
+// END OF FILE — LSS Pro v3.0.0
 // Commit: fix: instrument-aware news filter, adaptive OTE lookback, OTE bull verified
 // ============================================================
