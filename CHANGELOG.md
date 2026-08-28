@@ -6,9 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.1.1] — 2026-08-28
+
+Wave 1 — scoring-integrity fixes from the external code review. File renamed `LSS-Pro-v3_1_0.pine` → `LSS-Pro-v3_1_1.pine`.
+
+### Fixed
+- **HTF FVG / OB indexing (Bug A)** — Section 6B read `HTF_HIGH[2]` etc. in the LTF chart context, which is 2 *chart* bars back, not 2 HTF bars. Added `HTF_*_1` / `HTF_*_2` series pulled with the offset *inside* `request.security(…, close[1]/close[2], …)`. Restores ~13 pts of HTF FVG + HTF OB scoring that was effectively random.
+- **Score overflow (Bug B)** — `conf_score` now `math.min(100, …)`; tiered weights could sum to ~109 while the dashboard claimed "/100".
+- **Dashboard score colour bands (Bug C)** — realigned to `70 / 55 / 40 / 25` (were `101 / 81 / 61 / 41`, calibrated for the old ~285 scale — every score under 81 rendered dim).
+- **Win-rate expectancy (Bug D)** — old formula `P(win)·avg_r − P(loss)` double-counted losses (`avg_r` is already net). Tracker now shows two honest numbers: row 7 **Expectancy** = net R per trade, row 8 **Avg Win** = mean R on winning trades. TP1+BE realised R now uses `IN_TRADE_TP1_RR` instead of a hardcoded `TP2_RR × 0.5`.
+
+### Still open (later waves)
+Bug E (alert `{{plot_0}}` placeholder), Bug F (closed-trade line/box leak), Bug G (displacement math duplicated), Bug H (RSI divergence polarity), day-of-week code verification.
+
+---
+
 ## [3.1.0] — 2026-08-21
 
-Phase 4 — score rescale, win-rate tracking, news pre-positioning. File: `LSS-Pro-v3_1_0.pine`. Compiled clean on MCX Crude Oil 5m.
+Phase 4 — score rescale, win-rate tracking, news pre-positioning. File: `LSS-Pro-v3_1_0.pine` (renamed to `LSS-Pro-v3_1_1.pine` in 3.1.1). Compiled clean on MCX Crude Oil 5m.
 
 ### Added
 - **News Pre-Positioning Engine (Section 11.6)** — captures HTF bias during the pre-news window and confirms it on a post-news sweep; fires `ALT_PREPOS_BULL` / `ALT_PREPOS_BEAR` with a +8 score bonus

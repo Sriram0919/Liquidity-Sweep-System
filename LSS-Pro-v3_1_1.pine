@@ -1,7 +1,7 @@
 // ============================================================
 // LSS PRO — Liquidity Sweep System
-// Version  : 3.1.0
-// Release  : Score Rescale + Alert Refinement
+// Version  : 3.1.1
+// Release  : Scoring-integrity fixes (HTF FVG/OB indexing, score cap, dashboard bands, expectancy)
 // Author   : Sriram0919
 // Repo     : https://github.com/Sriram0919/Liquidity-Sweep-System
 // Branch   : develop
@@ -62,11 +62,22 @@
 //       — Pre window captures HTF+structure bias as expected post-news direction
 //       — Post window fires ALT_PREPOS_BULL/BEAR when sweep confirms direction
 //       — +8 score bonus on confirmation; dashboard shows ► (armed) / ✓ (confirmed)
+//
+// v3.1.1 — Scoring-integrity fixes (Wave 1)
+//   ✓ Bug A: HTF FVG / OB detection now reads true HTF-bar offsets.
+//       — Added HTF_*_1 / HTF_*_2 via request.security(..., close[1]/close[2], ...)
+//       — HTF_HIGH[2] etc. in LTF context was 2 *chart* bars back, not 2 HTF bars
+//       — restores ~13 pts of HTF FVG + HTF OB scoring that was unreliable
+//   ✓ Bug B: conf_score capped at math.min(100, …) — tiers could sum to ~109
+//   ✓ Bug C: dashboard score colour bands realigned 70/55/40/25 (were 101/81/61/41)
+//   ✓ Bug D: win-rate expectancy no longer double-counts losses
+//       — row 7 "Expectancy" = net R per trade; row 8 "Avg Win" = mean R on winners
+//       — TP1+BE realised R now uses IN_TRADE_TP1_RR (was TP2_RR × 0.5)
 // ============================================================
 
 //@version=6
 indicator(
-     title            = "LSS Pro v3.1.0",
+     title            = "LSS Pro v3.1.1",
      shorttitle       = "LSS Pro",
      overlay          = true,
      max_labels_count = 100,
@@ -78,7 +89,7 @@ indicator(
 // SECTION 1 — CONSTANTS
 // ============================================================
 
-string VERSION = "v3.1.0"
+string VERSION = "v3.1.1"
 
 // Trend States (EMA — visual only in v3.0.0, kept for EMA plots)
 string TREND_BULL    = "Bullish"
@@ -483,6 +494,21 @@ string RESOLVED_HTF = IN_HTF_AUTO ? fn_resolve_htf() : IN_HTF_MANUAL
          [open, high, low, close],
          lookahead = barmerge.lookahead_off)
 
+// v3.1.1 Bug A fix — HTF bars at explicit *HTF-bar* offsets.
+// Referencing HTF_HIGH[2] etc. in the LTF chart context returns the value
+// 2 *chart* bars ago, not 2 HTF bars ago (on 5m/1H they land on the same
+// HTF candle). Pull the offset inside request.security so [n] resolves on
+// the HTF. _1 = previous closed HTF bar, _2 = the one before that.
+[HTF_OPEN_1, HTF_HIGH_1, HTF_LOW_1, HTF_CLOSE_1] =
+     request.security(syminfo.tickerid, RESOLVED_HTF,
+         [open[1], high[1], low[1], close[1]],
+         lookahead = barmerge.lookahead_off)
+
+[HTF_OPEN_2, HTF_HIGH_2, HTF_LOW_2, HTF_CLOSE_2] =
+     request.security(syminfo.tickerid, RESOLVED_HTF,
+         [open[2], high[2], low[2], close[2]],
+         lookahead = barmerge.lookahead_off)
+
 // ============================================================
 // SECTION 6 — HTF STRUCTURE ENGINE  (v3.0.0)
 // ============================================================
@@ -573,9 +599,11 @@ float ATR_VAL = ta.atr(14)
 //   OHLC bars already pulled via request.security in Section 4.
 //
 //   HTF FVG (Fair Value Gap):
-//     Bull HTF FVG: HTF_HIGH[2] < HTF_LOW[0]  → upward gap
-//     Bear HTF FVG: HTF_LOW[2]  > HTF_HIGH[0] → downward gap
+//     Bull HTF FVG: HTF_HIGH_2 < HTF_LOW  → upward gap (bar N-2 high vs bar N low)
+//     Bear HTF FVG: HTF_LOW_2  > HTF_HIGH → downward gap
 //     CE = midpoint of the gap zone
+//     HTF_*_1 / HTF_*_2 are pulled with the offset inside request.security
+//     (Section 4) so [n] resolves on the HTF, not the LTF chart.
 //
 //   HTF Order Block (OB):
 //     Bull HTF OB: last bearish HTF candle before a bull HTF FVG forms
@@ -601,12 +629,13 @@ float ATR_VAL = ta.atr(14)
 // ============================================================
 
 // ── 6B.1 HTF FVG Detection ───────────────────────────────────
-// Use HTF bars already fetched in Section 4: HTF_HIGH, HTF_LOW, HTF_CLOSE, HTF_OPEN
-// [0] = current HTF bar, [1] = previous, [2] = bar before that
-// Pattern fires when the current HTF bar completes the 3-candle gap.
+// Use the HTF-offset bars pulled in Section 4:
+//   HTF_* (bar N, last closed HTF bar), HTF_*_1 (N-1), HTF_*_2 (N-2)
+// 3-candle gap: bar N-2 vs bar N, with bar N-1 the displacement candle.
+// Pattern fires on the LTF bar where HTF bar N completes (htf_bar_changed).
 
-bool htf_fvg_bull_detected = HTF_HIGH[2] < HTF_LOW[0]  and HTF_CLOSE[1] > HTF_OPEN[1]
-bool htf_fvg_bear_detected = HTF_LOW[2]  > HTF_HIGH[0] and HTF_CLOSE[1] < HTF_OPEN[1]
+bool htf_fvg_bull_detected = HTF_HIGH_2 < HTF_LOW  and HTF_CLOSE_1 > HTF_OPEN_1
+bool htf_fvg_bear_detected = HTF_LOW_2  > HTF_HIGH and HTF_CLOSE_1 < HTF_OPEN_1
 
 // Only fire on the bar where HTF values change (new HTF candle completed)
 bool htf_bar_changed = HTF_CLOSE != HTF_CLOSE[1]
@@ -628,30 +657,29 @@ var float  HTF_FVG_BEAR_OB_BOT = na  // HTF OB body bottom (bull HTF candle open
 
 // ── 6B.3 Register new HTF FVGs when a fresh HTF bar arrives ──
 if htf_bar_changed and htf_fvg_bull_detected
-    HTF_FVG_BULL_TOP   := HTF_LOW[0]
-    HTF_FVG_BULL_BOT   := HTF_HIGH[2]
-    HTF_FVG_BULL_CE    := (HTF_LOW[0] + HTF_HIGH[2]) / 2.0
+    HTF_FVG_BULL_TOP   := HTF_LOW
+    HTF_FVG_BULL_BOT   := HTF_HIGH_2
+    HTF_FVG_BULL_CE    := (HTF_LOW + HTF_HIGH_2) / 2.0
     HTF_FVG_BULL_STATE := FVG_FRESH
-    // HTF OB = candle[2] search: last bearish HTF candle before the gap
-    // We approximate using HTF_OPEN[2]/HTF_CLOSE[2] — the gap initiator bar
-    if HTF_CLOSE[2] < HTF_OPEN[2]
-        HTF_FVG_BULL_OB_TOP := HTF_OPEN[2]
-        HTF_FVG_BULL_OB_BOT := HTF_CLOSE[2]
+    // HTF OB = last bearish HTF candle before the displacement (bar N-2).
+    if HTF_CLOSE_2 < HTF_OPEN_2
+        HTF_FVG_BULL_OB_TOP := HTF_OPEN_2
+        HTF_FVG_BULL_OB_BOT := HTF_CLOSE_2
     else
-        // impulse bar was bullish — OB is not meaningful, clear it
+        // bar N-2 was bullish — OB is not meaningful, clear it
         HTF_FVG_BULL_OB_TOP := na
         HTF_FVG_BULL_OB_BOT := na
 
 if htf_bar_changed and htf_fvg_bear_detected
-    // Bear HTF FVG: HTF_LOW[2] > HTF_HIGH[0] → gap between low of bar[2] and high of bar[0]
-    HTF_FVG_BEAR_TOP   := HTF_LOW[2]   // bottom of bar[2] — top of the gap zone
-    HTF_FVG_BEAR_BOT   := HTF_HIGH[0]  // top of bar[0]  — bottom of the gap zone
-    HTF_FVG_BEAR_CE    := (HTF_LOW[2] + HTF_HIGH[0]) / 2.0
+    // Bear HTF FVG: HTF_LOW_2 > HTF_HIGH → gap between low of bar N-2 and high of bar N
+    HTF_FVG_BEAR_TOP   := HTF_LOW_2   // low of bar N-2 — top of the gap zone
+    HTF_FVG_BEAR_BOT   := HTF_HIGH    // high of bar N  — bottom of the gap zone
+    HTF_FVG_BEAR_CE    := (HTF_LOW_2 + HTF_HIGH) / 2.0
     HTF_FVG_BEAR_STATE := FVG_FRESH
-    // HTF OB = last bullish HTF candle — use bar[2] as initiator
-    if HTF_CLOSE[2] > HTF_OPEN[2]
-        HTF_FVG_BEAR_OB_TOP := HTF_CLOSE[2]
-        HTF_FVG_BEAR_OB_BOT := HTF_OPEN[2]
+    // HTF OB = last bullish HTF candle before the displacement (bar N-2).
+    if HTF_CLOSE_2 > HTF_OPEN_2
+        HTF_FVG_BEAR_OB_TOP := HTF_CLOSE_2
+        HTF_FVG_BEAR_OB_BOT := HTF_OPEN_2
     else
         HTF_FVG_BEAR_OB_TOP := na
         HTF_FVG_BEAR_OB_BOT := na
@@ -2681,7 +2709,9 @@ if _rej_bear and STRUCTURE_BIAS == MS_BIAS_BEAR
 
 // ── 15.4 Signal Generation ──────────────────────────────────
 
-int  conf_score = math.max(bull_score, bear_score)
+// v3.1.1 Bug B fix — tiered weights can sum past 100 (theoretical max ~109).
+// Cap the reported score so the "/100" display, stars and colour bands stay honest.
+int  conf_score = math.min(100, math.max(bull_score, bear_score))
 string conf_dir = bull_score > bear_score ? "Bull" : bear_score > bull_score ? "Bear" : "—"
 bool conf_signal_bull = bull_score >= IN_CONF_THRESHOLD and bull_score > bear_score
 bool conf_signal_bear = bear_score >= IN_CONF_THRESHOLD and bear_score > bull_score
@@ -3596,10 +3626,12 @@ if IN_SHOW_DASH and barstate.islast
     dash_row(16, "Last Break", ms_last_break, ms_last_clr)
 
     // Confluence Scoring (NEW in v2.4.0)
-    color score_clr = conf_score >= 101 ? color.new(#00E676, 0) :
-         conf_score >= 81  ? COLOR_BULL :
-         conf_score >= 61  ? COLOR_INFO :
-         conf_score >= 41  ? COLOR_NEUTRAL :
+    // v3.1.1 Bug C fix — bands were still on the old ~285 scale (101/81/61/41).
+    // Realigned to the 0–100 star thresholds (70/55/40/25).
+    color score_clr = conf_score >= 70 ? color.new(#00E676, 0) :
+         conf_score >= 55  ? COLOR_BULL :
+         conf_score >= 40  ? COLOR_INFO :
+         conf_score >= 25  ? COLOR_NEUTRAL :
          COLOR_DIM
     dash_row(17, "Score",
          str.tostring(conf_score) + " / 100  " + star_display, score_clr)
@@ -3676,7 +3708,8 @@ var int   WR_TOTAL   = 0     // total closed trades
 var int   WR_TP2     = 0     // full wins (TP2 hit)
 var int   WR_TP1_BE  = 0     // partial wins (TP1 + breakeven)
 var int   WR_SL      = 0     // losses (SL hit)
-var float WR_R_TOTAL = 0.0   // cumulative R (TP2=2R, TP1BE=1R, SL=-1R)
+var float WR_R_TOTAL = 0.0   // cumulative NET R  (TP2=+TP2_RR, TP1BE=+TP1_RR/2, SL=-1R)
+var float WR_R_WINS  = 0.0   // cumulative GROSS R from winning trades only (TP2 + TP1BE)
 var int   WR_SCORE_SUM = 0   // sum of entry scores for avg calculation
 
 // ── 17.2 Outcome Capture ────────────────────────────────────
@@ -3687,12 +3720,18 @@ if EVT_TRADE_TP2
     WR_TOTAL     += 1
     WR_TP2       += 1
     WR_R_TOTAL   += TRADE_RR           // actual TP2 R:R set at creation
+    WR_R_WINS    += TRADE_RR
     WR_SCORE_SUM += ENTRY_SCORE_VAL
 
 if EVT_TRADE_BE
+    // TP1 partial hit, remainder stopped at breakeven: assume half the
+    // position closed at the user's TP1 R:R, half at 0R  →  TP1_RR / 2.
+    // v3.1.1 Bug D fix — was TRADE_RR*0.5 (= TP2_RR/2), ignoring IN_TRADE_TP1_RR.
+    float _be_r  = IN_TRADE_TP1_RR * 0.5
     WR_TOTAL     += 1
     WR_TP1_BE    += 1
-    WR_R_TOTAL   += TRADE_RR * 0.5    // TP1 partial: roughly half the TP2 R
+    WR_R_TOTAL   += _be_r
+    WR_R_WINS    += _be_r
     WR_SCORE_SUM += ENTRY_SCORE_VAL
 
 if EVT_TRADE_SL
@@ -3707,7 +3746,13 @@ int   wr_wins     = WR_TP2 + WR_TP1_BE
 float wr_pct      = WR_TOTAL > 0 ? (float(wr_wins) / float(WR_TOTAL)) * 100.0 : 0.0
 float wr_avg_r    = WR_TOTAL > 0 ? WR_R_TOTAL / float(WR_TOTAL) : 0.0
 float wr_avg_score = WR_TOTAL > 0 ? float(WR_SCORE_SUM) / float(WR_TOTAL) : 0.0
-float wr_expectancy = wr_pct / 100.0 * wr_avg_r - (1.0 - wr_pct / 100.0)
+
+// v3.1.1 Bug D fix — old formula was  P(win)·avg_r − P(loss),  which
+// double-counted losses (avg_r is already net of losers). Report the two
+// honest, non-overlapping numbers instead:
+//   wr_avg_r      = net R per trade  (this IS the per-trade expectancy)
+//   wr_avg_win_r  = average R on winning trades  (gross win size)
+float wr_avg_win_r = wr_wins > 0 ? WR_R_WINS / float(wr_wins) : 0.0
 
 // ── 17.4 Tracker Table ──────────────────────────────────────
 
@@ -3759,12 +3804,12 @@ if IN_SHOW_WR and barstate.islast
     table.cell(WR_TABLE, 1, 6, (WR_R_TOTAL >= 0 ? "+" : "") + str.tostring(math.round(WR_R_TOTAL, 2)) + "R", text_color = r_clr,   text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
 
     color avgr_clr = wr_avg_r >= 0 ? clr_win : clr_loss
-    table.cell(WR_TABLE, 0, 7, "Avg R/Trade",                                                               text_color = clr_lbl,  text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
-    table.cell(WR_TABLE, 1, 7, (wr_avg_r >= 0 ? "+" : "") + str.tostring(math.round(wr_avg_r, 2)) + "R",   text_color = avgr_clr, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
+    table.cell(WR_TABLE, 0, 7, "Expectancy",                                                                text_color = clr_lbl,  text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
+    table.cell(WR_TABLE, 1, 7, (wr_avg_r >= 0 ? "+" : "") + str.tostring(math.round(wr_avg_r, 3)) + "R",   text_color = avgr_clr, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
 
-    color exp_clr = wr_expectancy >= 0 ? clr_win : clr_loss
-    table.cell(WR_TABLE, 0, 8, "Expectancy",                                                                              text_color = clr_lbl, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
-    table.cell(WR_TABLE, 1, 8, (wr_expectancy >= 0 ? "+" : "") + str.tostring(math.round(wr_expectancy, 3)), text_color = exp_clr, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
+    color awr_clr = wr_avg_win_r >= 1.0 ? clr_win : clr_neut
+    table.cell(WR_TABLE, 0, 8, "Avg Win",                                                                       text_color = clr_lbl, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
+    table.cell(WR_TABLE, 1, 8, "+" + str.tostring(math.round(wr_avg_win_r, 2)) + "R",                            text_color = awr_clr, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
 
     table.cell(WR_TABLE, 0, 9, "Avg Score",                                                          text_color = clr_lbl, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))
     table.cell(WR_TABLE, 1, 9, str.tostring(math.round(wr_avg_score, 1)) + " / 100",                text_color = clr_val, text_size = size.small, bgcolor = color.new(#1C1C1E, 5))

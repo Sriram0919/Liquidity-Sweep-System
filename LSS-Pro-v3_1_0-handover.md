@@ -58,12 +58,12 @@ Next milestone is **Phase 5** — see Section 6 below.
 
 ## 3. Current Code State
 
-- **File:** `LSS-Pro-v3_1_0.pine`
+- **File:** `LSS-Pro-v3_1_1.pine` (was `LSS-Pro-v3_1_0.pine` through v3.1.0)
 - **Repo:** `~/Documents/Liquidity-Sweep-System`, branch `develop`
-- **Indicator title:** `"LSS Pro v3.1.0"`
-- **VERSION constant:** `"v3.1.0"`
-- **Compilation status:** Clean — compiled on MCX Crude Oil 5m
-- **Commit message:** `feat: Phase 4 — win-rate tracker, score rescale 0-100, score-gated alerts, news pre-positioning (v3.1.0)`
+- **Indicator title:** `"LSS Pro v3.1.1"`
+- **VERSION constant:** `"v3.1.1"`
+- **Compilation status:** v3.1.0 compiled clean on MCX Crude Oil 5m. v3.1.1 edits are source-only — **recompile pending** (see Section 7).
+- **Latest commit:** Wave 1 scoring-integrity fixes (Bugs A–D) — v3.1.1
 
 ---
 
@@ -123,45 +123,28 @@ ATR_VAL declared (above Section 6B — shared by 6B and Section 13)
 
 ## 5. Known Bugs / Pending Issues
 
-### From external code review (Aug 2026) — not yet fixed
+> **v3.1.1 (2026-08-28) — Wave 1 fixed Bugs A, B, C, D.** Code is now `LSS-Pro-v3_1_1.pine`.
+> Remaining: Bugs E, F, G, H and the day-of-week verification (Wave 2).
 
-#### 🔴 CRITICAL
+### From external code review (Aug 2026)
 
-**Bug A — HTF security indexing (Section 6B)**
-`HTF_HIGH[2]` in the LTF chart context means 2 *chart* bars ago, not 2 HTF bars ago. On 5m chart with 1H HTF, `[2]` usually points at the same HTF candle. The correct pattern uses the offset *inside* the `request.security()` call:
-```pinescript
-// Wrong (current):
-HTF_HIGH = request.security(...)
-htf_fvg_bull = HTF_HIGH[2] < HTF_LOW[0]
+#### ✅ FIXED in v3.1.1
 
-// Correct:
-HTF_HIGH_2 = request.security(syminfo.tickerid, RESOLVED_HTF, high[2])
-htf_fvg_bull = HTF_HIGH_2 < HTF_LOW
-```
-Affects all of `HTF_OPEN[2]`, `HTF_CLOSE[2]`, `HTF_HIGH[2]`, `HTF_LOW[0]` — i.e., the entire HTF FVG + HTF OB scoring contribution (~13 points) is unreliable.
-**Priority: Fix before any Phase 5 scoring tuning.**
+**Bug A — HTF security indexing (Section 6B)** 🔴
+`HTF_HIGH[2]` in the LTF chart context meant 2 *chart* bars back, not 2 HTF bars — on 5m/1H it landed on the same HTF candle, making the entire HTF FVG + HTF OB scoring (~13 pts) unreliable.
+**Fix:** Section 4 now also pulls `HTF_{OPEN,HIGH,LOW,CLOSE}_1` and `_2` via `request.security(syminfo.tickerid, RESOLVED_HTF, [open[1], …], lookahead = barmerge.lookahead_off)`. Section 6B detection (`htf_fvg_bull_detected` etc.) and registration use those; `_2` = bar N-2, `_1` = N-1, bare = last closed HTF bar.
 
-**Bug B — Score can exceed 100**
-Summing all branches gives a theoretical max of ~109. The "/100" dashboard display and star thresholds misrepresent this. Quick fix: `math.min(100, score)`. Deeper fix: enforce tier caps.
-**Priority: Quick cap fix is trivial — do it.**
+**Bug B — Score can exceed 100** 🔴
+**Fix:** `conf_score = math.min(100, math.max(bull_score, bear_score))`. Deeper per-tier caps still deferred.
 
-#### 🟠 MEDIUM
+**Bug C — Dashboard score colour thresholds stale** 🟠
+Bands were `101/81/61/41` (old ~285 scale). **Fix:** realigned to `70/55/40/25` to match the star thresholds.
 
-**Bug C — Dashboard score colour thresholds are stale**
-```pinescript
-conf_score >= 101 ? ... : >= 81 ? ... : >= 61 ? ...
-```
-Calibrated for the old ~285 scale. Per v3.1.0 changelog should be `70 / 55 / 40`. Every score below 81 renders dim even on strong setups.
+**Bug D — Win-rate expectancy double-counts losses** 🟠
+`wr_pct/100 * wr_avg_r - (1 - wr_pct/100)` — `wr_avg_r` is already net of losers.
+**Fix:** dropped that formula. Added `WR_R_WINS` accumulator. Tracker row 7 **Expectancy** = `wr_avg_r` (net R/trade); row 8 repurposed to **Avg Win** = `WR_R_WINS / wr_wins`. TP1+BE realised R now `IN_TRADE_TP1_RR * 0.5` (was `TRADE_RR * 0.5`).
 
-**Bug D — Win-rate expectancy math double-subtracts losses**
-```pinescript
-wr_expectancy = wr_pct/100 * wr_avg_r - (1 - wr_pct/100)
-```
-`wr_avg_r` already accounts for losing trades. Losses are subtracted twice. Correct formula:
-```pinescript
-expectancy = (WR_TP2 * TRADE_RR + WR_TP1_BE * TRADE_RR * 0.5 - WR_SL * 1) / WR_TOTAL
-```
-Also: TP1+BE R is hardcoded as `TRADE_RR * 0.5` regardless of user's TP1 RR setting.
+#### 🟠 OPEN — MEDIUM
 
 **Bug E — Broken alert placeholder**
 ```pinescript
@@ -231,21 +214,23 @@ Deferred:
 
 ## 7. Exact Next Task
 
-**Fix Bug A (HTF security indexing) and Bug B (score cap) first** — these affect scoring integrity before any Phase 5 tuning is meaningful.
+Wave 1 (Bugs A–D) is done in v3.1.1. Next:
 
-Then: **Build Weekly High/Low chart lines** (agreed Phase 5 visualization target).
+1. **Wave 2 — Bugs E, F, G, H** + verify the day-of-week codes on a live chart (see Section 5).
+2. **Wave 3 — Weekly High/Low chart lines**, then HTF swing level lines (`HTF_LAST_SH` / `HTF_LAST_SL`).
+3. **Wave 4 — Phase 5 signal-quality filters** (premium/discount equilibrium first).
 
 **To verify state at start of new conversation:**
 ```bash
-grep -n "string VERSION\|Section 17\|WR_TOTAL\|ALT_PREPOS" LSS-Pro-v3_1_0.pine | head -20
+grep -n "string VERSION\|HTF_HIGH_2\|Section 17\|WR_R_WINS\|ALT_PREPOS" LSS-Pro-v3_1_1.pine | head -20
 ```
-- `VERSION = "v3.1.0"`, `Section 17` found, `WR_TOTAL` found, `ALT_PREPOS` found → Phase 4 complete → proceed to Phase 5
+- `VERSION = "v3.1.1"`, `HTF_HIGH_2` found, `WR_R_WINS` found → Wave 1 landed → proceed to Wave 2
 
 ---
 
 ## 8. Files Needed
 
-**Primary file:** `LSS-Pro-v3_1_0.pine`
+**Primary file:** `LSS-Pro-v3_1_1.pine`
 - Repo: `~/Documents/Liquidity-Sweep-System`, branch `develop`
 
 **No other files required.** Entire indicator is single-file.
