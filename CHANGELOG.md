@@ -6,6 +6,105 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.1.0] — 2026-08-21
+
+Phase 4 — score rescale, win-rate tracking, news pre-positioning. File: `LSS-Pro-v3_1_0.pine`. Compiled clean on MCX Crude Oil 5m.
+
+### Added
+- **News Pre-Positioning Engine (Section 11.6)** — captures HTF bias during the pre-news window and confirms it on a post-news sweep; fires `ALT_PREPOS_BULL` / `ALT_PREPOS_BEAR` with a +8 score bonus
+- **Win-Rate Tracker (Section 17)** — logs every closed trade (TP2 / TP1+BE / SL) to a dashboard block: Win %, Total R, Avg R, Expectancy, Avg Score at entry
+- **Score-gated alerts** — `ALT_SWEEP`, `ALT_CE`, `ALT_CHOCH` (bull/bear) fire only when the confluence score ≥ `IN_ALERT_MIN_SCORE`
+
+### Changed
+- **Confluence score rescaled from ~225 to a clean 0–100 scale** — 23 components, tiered weights (Core ICT ~50 / HTF Alignment ~25 / Quality Markers ~15 / Supporting ~10)
+- Dashboard expanded and score display switched to `/100`
+- `fn_clear_trade_visuals()` now also runs on `TRADE_BE_HIT`
+
+### Known issues (carried into Phase 5)
+- HTF security indexing in Section 6B (`HTF_HIGH[2]` is chart-bars, not HTF-bars) makes ~13 points of HTF scoring unreliable
+- Theoretical score max can reach ~109; not yet capped
+- Some dashboard colour thresholds still calibrated for the old ~285 scale
+- Win-rate expectancy formula double-subtracts losses
+
+### Companion
+- **LSS News Monitor** (separate repo) went live — Python + RSS + GitHub Actions cron `*/10 * * * *`, Telegram alerts for crude oil and India market events
+
+---
+
+## [3.0.0] — 2026-08-16
+
+Phase 3 — MTF Intelligence. Real higher-timeframe structure replaces the EMA crossover proxy.
+
+### Added
+- **HTF Structure Engine (Section 6)** — HTF swing highs/lows via `request.security` with `ta.pivothigh` / `ta.pivotlow`; `HTF_BIAS` derived from HTF close vs last confirmed pivot (non-repainting)
+- **HTF FVG & Order Block Engine (Section 6B)** — 3-candle HTF fair value gap detection, HTF OB body zone, CE proximity checks feeding the score
+- Dashboard HTF block (bias, last SH/SL, HTF FVG/OB state) moved to the top
+
+### Changed
+- `HTF trend alignment` score factor now driven by real HTF structure instead of EMA 50/200 crossover
+- `TREND_STATE` kept as an alias for `HTF_BIAS` so existing alerts/debug compile unchanged
+- `ATR_VAL` moved above Section 6B (was in Section 13) — fixes an undeclared-identifier error
+- HTF FVG boxes intentionally not drawn (span 12+ LTF candles, cluttered the 5m chart) — HTF context lives in the dashboard and score only
+
+---
+
+## [2.7.1] — 2026-08-16
+
+### Added
+- **Instrument-aware news filter** — `IS_CRUDE` / `IS_NATGAS` / `IS_EQUITY` detection; EIA/API crude events no longer block setups on unrelated instruments
+- **Adaptive OTE lookback** — `IN_MS_SWING_LB × mult` where mult is 16 / 12 / 8 / 6 for ≤5m / ≤30m / ≤4H / daily+
+- OTE zone box shows ▲/▼ direction label
+
+### Fixed
+- Bullish Fibonacci OTE math verified and annotated
+
+---
+
+## [2.7.0] — 2026-08-13
+
+Sweep grading, displacement, stateful FVG, order blocks, and setup lifecycle.
+
+### Added
+- **Sweep grading A/B/C** on liquidity sweeps, with PDH/PDL bonus and inducement (double-sweep) detection
+- **Displacement Detection (Section 12.5)** — body %, range/ATR, volume/SMA → NONE / NORMAL / STRONG
+- **5-state FVG Engine** — Fresh → First Touch → CE Touch → Deep Retest → Mitigated (states are strings)
+- **Order Block Engine (Section 13B)** — border-only zones off displacement candles
+- **Market Structure upgrades** — CHoCH+ classification, structure bias, counter-trend FVG purge on CHoCH
+- **Fibonacci OTE Zone (Section 14.9)** — 50–70.5% retracement zone
+- **Setup Lifecycle (Section 16)** — pending → active with CE-touch close confirmation and a news gate
+- Confluence score expanded to a max of 225 with grade-aware sweep/FVG weighting
+- Dashboard grown to 25 rows; alerts for all FVG states and displacement
+
+---
+
+## [2.4.0] — 2026-08-10
+
+### Added
+- **Confluence Scoring Engine** — weighted score combining all detections
+- RSI overbought/oversold and divergence contribution
+- Volume spike contribution
+- VWAP alignment contribution
+
+---
+
+## [2.3.0] — 2026-08-10
+
+### Added
+- **Market Structure Engine** — Break of Structure (BOS) and Change of Character (CHoCH) from confirmed pivots
+- Structure bias state
+
+### Fixed
+- Dashboard / UI layout fixes
+
+---
+
+## [2.2.0] — 2026-08-10
+
+### Added
+- **FVG Engine** — fair value gap detection with an impulse-candle filter to suppress noise gaps
+
+---
+
 ## [2.1.0] — 2026-08-08
 
 ### Added
