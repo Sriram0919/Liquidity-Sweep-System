@@ -1,7 +1,7 @@
 // ============================================================
 // LSS PRO — Liquidity Sweep System
-// Version  : 3.1.1
-// Release  : Scoring-integrity fixes (HTF FVG/OB indexing, score cap, dashboard bands, expectancy)
+// Version  : 3.1.2
+// Release  : Correctness cleanup (directional trend alerts, line-leak, displacement dedup, RSI divergence)
 // Author   : Sriram0919
 // Repo     : https://github.com/Sriram0919/Liquidity-Sweep-System
 // Branch   : develop
@@ -73,11 +73,23 @@
 //   ✓ Bug D: win-rate expectancy no longer double-counts losses
 //       — row 7 "Expectancy" = net R per trade; row 8 "Avg Win" = mean R on winners
 //       — TP1+BE realised R now uses IN_TRADE_TP1_RR (was TP2_RR × 0.5)
+//
+// v3.1.2 — Correctness cleanup (Wave 2)
+//   ✓ Bug E: trend-change alert split into two const-message directional
+//       conditions (Bullish / Bearish) — the {{plot_0}} placeholder was empty
+//   ✓ Bug F: closed-trade line/box handles kept valid so the next setup's
+//       fn_clear_trade_visuals() deletes them — was leaking toward max_lines_count
+//   ✓ Bug G: displacement metrics computed once in Section 12; Section 12.5
+//       reuses them (was duplicated → threshold edits could desync)
+//   ✓ Bug H: RSI divergence rewritten pivot-to-pivot (5/5 legs) — old rolling
+//       high/low comparison included the current bar → ±3 pts of random polarity
+//   ✓ Day-of-week note: session codes :4=Wed :3=Tue :5=Thu are CORRECT per
+//       Pine's 1=Sun…7=Sat encoding. Reviewer was wrong. No change.
 // ============================================================
 
 //@version=6
 indicator(
-     title            = "LSS Pro v3.1.1",
+     title            = "LSS Pro v3.1.2",
      shorttitle       = "LSS Pro",
      overlay          = true,
      max_labels_count = 100,
@@ -89,7 +101,7 @@ indicator(
 // SECTION 1 — CONSTANTS
 // ============================================================
 
-string VERSION = "v3.1.1"
+string VERSION = "v3.1.2"
 
 // Trend States (EMA — visual only in v3.0.0, kept for EMA plots)
 string TREND_BULL    = "Bullish"
@@ -936,19 +948,25 @@ var int  LAST_SSL_GRADE = SWEEP_C
 // ── Running structure bias (pre-declared here so FVG filter in Section 13 can reference it)
 var string STRUCTURE_BIAS = MS_BIAS_NONE
 
-// ── Displacement pre-declarations ────────────────────────────
-// Full engine is in Section 12.5, but sweep grading (below) needs
-// EVT_DISP_BULL/BEAR. Compute early using same inputs/logic.
-float _pre_disp_atr     = ta.atr(14)
-float _pre_disp_vol_sma = ta.sma(volume, IN_VOL_LEN)
-float _pre_disp_body    = math.abs(close[1] - open[1])
-float _pre_disp_range   = high[1] - low[1]
-bool  _pre_disp_ok      = _pre_disp_range > 0
-     and (_pre_disp_body / _pre_disp_range)                              >= IN_DISP_BODY_MIN
-     and (_pre_disp_atr     > 0 ? _pre_disp_range / _pre_disp_atr     : 0.0) >= IN_DISP_RANGE_MIN
-     and (_pre_disp_vol_sma > 0 ? volume[1] / _pre_disp_vol_sma : 0.0) >= IN_DISP_VOL_MIN
-bool EVT_DISP_BULL = _pre_disp_ok and close[1] >= open[1]
-bool EVT_DISP_BEAR = _pre_disp_ok and close[1] <  open[1]
+// ── Displacement metrics — SINGLE SOURCE OF TRUTH ────────────
+// v3.1.2 Bug G fix — these were computed here AND recomputed in Section 12.5
+// with the same formulas. Any threshold/formula edit had to be mirrored or
+// sweep grading and FVG grading silently disagreed. Now computed once here
+// (sweep grading below needs EVT_DISP_BULL/BEAR); Section 12.5 only adds the
+// STRONG tier + grade/direction on top of these.
+float DISP_ATR       = ta.atr(14)
+float DISP_VOL_SMA   = ta.sma(volume, IN_VOL_LEN)
+float disp_body      = math.abs(close[1] - open[1])
+float disp_range     = high[1] - low[1]
+float disp_body_pct  = disp_range   > 0 ? disp_body / disp_range   : 0.0
+float disp_range_atr = DISP_ATR     > 0 ? disp_range / DISP_ATR    : 0.0
+float disp_vol_ratio = DISP_VOL_SMA > 0 ? volume[1] / DISP_VOL_SMA : 0.0
+bool  disp_body_ok   = disp_body_pct  >= IN_DISP_BODY_MIN
+bool  disp_range_ok  = disp_range_atr >= IN_DISP_RANGE_MIN
+bool  disp_vol_ok    = disp_vol_ratio >= IN_DISP_VOL_MIN
+bool  disp_all_ok    = disp_body_ok and disp_range_ok and disp_vol_ok
+bool EVT_DISP_BULL = disp_all_ok and close[1] >= open[1]
+bool EVT_DISP_BEAR = disp_all_ok and close[1] <  open[1]
 
 EVT_BSL_SWEPT := false
 EVT_SSL_SWEPT := false
@@ -1311,33 +1329,19 @@ plotshape(EVT_SSL_SWEPT, title = "SSL Swept",
 //   Section 15  — Confluence scoring (Step 5)
 // ============================================================
 
-// ── 12.5.1 ATR + Volume SMA pre-computed here ────────────────
-// ATR_VAL is declared above Section 6B — available here.
-// VolSMA is already computed in Section 14 as CONF_VOL_SMA,
-// but Section 14 runs after us — compute a local copy.
-float DISP_ATR    = ta.atr(14)
-float DISP_VOL_SMA = ta.sma(volume, IN_VOL_LEN)
+// ── 12.5.1–12.5.3 Metrics + threshold checks ─────────────────
+// v3.1.2 Bug G fix — DISP_ATR, DISP_VOL_SMA, disp_body, disp_range,
+// disp_body_pct, disp_range_atr, disp_vol_ratio, disp_body_ok, disp_range_ok,
+// disp_vol_ok, disp_all_ok are ALL declared once in Section 12's displacement
+// pre-declaration block. Just reuse them here — no recomputation.
 
-// ── 12.5.2 Per-bar metric computation (bar[1]) ───────────────
-float disp_body   = math.abs(close[1] - open[1])
-float disp_range  = high[1] - low[1]
-float disp_body_pct  = disp_range > 0 ? disp_body / disp_range : 0.0
-float disp_range_atr = DISP_ATR    > 0 ? disp_range / DISP_ATR    : 0.0
-float disp_vol_ratio = DISP_VOL_SMA > 0 ? volume[1] / DISP_VOL_SMA : 0.0
-
-// ── 12.5.3 Threshold checks ──────────────────────────────────
-bool disp_body_ok  = disp_body_pct  >= IN_DISP_BODY_MIN
-bool disp_range_ok = disp_range_atr >= IN_DISP_RANGE_MIN
-bool disp_vol_ok   = disp_vol_ratio >= IN_DISP_VOL_MIN
-bool disp_all_ok   = disp_body_ok and disp_range_ok and disp_vol_ok
-
-// Strong: all three exceed 1.5× their thresholds
+// ── 12.5.4 Strong tier: all three exceed 1.5× their thresholds
 bool disp_body_strong  = disp_body_pct  >= IN_DISP_BODY_MIN  * 1.5
 bool disp_range_strong = disp_range_atr >= IN_DISP_RANGE_MIN * 1.5
 bool disp_vol_strong   = disp_vol_ratio >= IN_DISP_VOL_MIN   * 1.5
 bool disp_all_strong   = disp_body_strong and disp_range_strong and disp_vol_strong
 
-// ── 12.5.4 Grade + Direction ─────────────────────────────────
+// ── 12.5.5 Grade + Direction ─────────────────────────────────
 int DISP_GRADE = disp_all_ok ? (disp_all_strong ? DISP_STRONG : DISP_NORMAL) : DISP_NONE
 
 string DISP_DIR = DISP_GRADE == DISP_NONE ? "—" : close[1] >= open[1] ? "Bull" : "Bear"
@@ -2403,11 +2407,39 @@ float CONF_RSI = ta.rsi(close, IN_RSI_LEN)
 bool  rsi_ob   = CONF_RSI >= IN_RSI_OB
 bool  rsi_os   = CONF_RSI <= IN_RSI_OS
 
-// RSI Divergence (simple: price makes new low but RSI makes higher low → bullish)
-float rsi_low_5  = ta.lowest(CONF_RSI, 10)
-float price_low_5 = ta.lowest(low, 10)
-bool  rsi_bull_div = low[1] <= price_low_5[1] and CONF_RSI > rsi_low_5
-bool  rsi_bear_div = high[1] >= ta.highest(high, 10)[1] and CONF_RSI < ta.highest(CONF_RSI, 10)
+// RSI Divergence — v3.1.2 Bug H fix.
+// Old version compared current RSI to a rolling high/low that INCLUDED the
+// current bar, so both conditions were true on most bars → ±3 pts of random
+// polarity. Replaced with proper pivot-to-pivot comparison: confirm a price
+// swing pivot (5/5 legs), sample RSI at that same pivot bar, compare to the
+// previous confirmed pivot.
+int _div_lb = 5
+float _px_pl = ta.pivotlow(low, _div_lb, _div_lb)
+float _px_ph = ta.pivothigh(high, _div_lb, _div_lb)
+
+var float _prev_pl_px  = na
+var float _prev_pl_rsi = na
+var float _prev_ph_px  = na
+var float _prev_ph_rsi = na
+
+bool rsi_bull_div = false
+bool rsi_bear_div = false
+
+if not na(_px_pl)
+    float _rsi_at_pl = CONF_RSI[_div_lb]
+    // bullish divergence: price lower low, RSI higher low
+    if not na(_prev_pl_px) and _px_pl < _prev_pl_px and _rsi_at_pl > _prev_pl_rsi
+        rsi_bull_div := true
+    _prev_pl_px  := _px_pl
+    _prev_pl_rsi := _rsi_at_pl
+
+if not na(_px_ph)
+    float _rsi_at_ph = CONF_RSI[_div_lb]
+    // bearish divergence: price higher high, RSI lower high
+    if not na(_prev_ph_px) and _px_ph > _prev_ph_px and _rsi_at_ph < _prev_ph_rsi
+        rsi_bear_div := true
+    _prev_ph_px  := _px_ph
+    _prev_ph_rsi := _rsi_at_ph
 
 // Volume (CONF_VOL_SMA defined earlier in Section 14 for CHoCH+ access)
 float CONF_VOL     = volume
@@ -3374,12 +3406,9 @@ if TRADE_STATE == TRADE_ACTIVE or TRADE_STATE == TRADE_TP1_HIT
         label.delete(TRADE_LBL_SL)
         label.delete(TRADE_LBL_TP1)
         label.delete(TRADE_LBL_TP2)
-        TRADE_LN_ENTRY  := na
-        TRADE_LN_SL     := na
-        TRADE_LN_TP1    := na
-        TRADE_LN_TP2    := na
-        TRADE_BX_RISK   := na
-        TRADE_BX_REWARD := na
+        // v3.1.2 Bug F fix — keep the line/box handles VALID so the next
+        // setup's fn_clear_trade_visuals() can line.delete()/box.delete()
+        // them. Nulling here orphaned them → leak toward max_lines_count.
         TRADE_LBL_ENTRY := na
         TRADE_LBL_SL    := na
         TRADE_LBL_TP1   := na
@@ -3399,12 +3428,7 @@ if TRADE_STATE == TRADE_ACTIVE or TRADE_STATE == TRADE_TP1_HIT
         label.delete(TRADE_LBL_SL)
         label.delete(TRADE_LBL_TP1)
         label.delete(TRADE_LBL_TP2)
-        TRADE_LN_ENTRY  := na
-        TRADE_LN_SL     := na
-        TRADE_LN_TP1    := na
-        TRADE_LN_TP2    := na
-        TRADE_BX_RISK   := na
-        TRADE_BX_REWARD := na
+        // v3.1.2 Bug F fix — see hit_sl block above. Keep line/box handles valid.
         TRADE_LBL_ENTRY := na
         TRADE_LBL_SL    := na
         TRADE_LBL_TP1   := na
@@ -3896,9 +3920,16 @@ if not IN_SHOW_DEBUG
 // SECTION 11 — ALERT ENGINE  (updated for v2.6.0)
 // ============================================================
 
-alertcondition(TREND_CHANGED,
-     title = "LSS Pro — Trend Change",
-     message = "LSS Pro | Trend: {{plot_0}} | {{ticker}} {{interval}}")
+// v3.1.2 Bug E fix — {{plot_0}} referenced a plot that does not exist, so the
+// message rendered garbage. alertcondition messages must be const strings (no
+// runtime interpolation), so split the flip into two directional conditions.
+alertcondition(TREND_CHANGED and HTF_BIAS == HTF_BIAS_BULL,
+     title = "LSS Pro — HTF Trend flipped Bullish",
+     message = "LSS Pro | HTF trend flipped BULLISH | {{ticker}} {{interval}}")
+
+alertcondition(TREND_CHANGED and HTF_BIAS == HTF_BIAS_BEAR,
+     title = "LSS Pro — HTF Trend flipped Bearish",
+     message = "LSS Pro | HTF trend flipped BEARISH | {{ticker}} {{interval}}")
 
 bool SESSION_CHANGED = ACTIVE_SESSION != ACTIVE_SESSION[1]
 alertcondition(SESSION_CHANGED,

@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.1.2] — 2026-08-28
+
+Wave 2 — correctness cleanup, clears the rest of the external-review backlog. File renamed `LSS-Pro-v3_1_1.pine` → `LSS-Pro-v3_1_2.pine`.
+
+### Fixed
+- **Trend-change alert (Bug E)** — `{{plot_0}}` in the message referenced a non-existent plot and rendered garbage. Split into two const-message conditions: "HTF Trend flipped Bullish" / "…Bearish".
+- **Closed-trade line/box leak (Bug F)** — on SL/TP2 close the code deleted the labels but nulled the `line`/`box` handles without `line.delete()`, orphaning 4 lines + 2 boxes per trade toward `max_lines_count`. Handles are now kept valid so the next setup's `fn_clear_trade_visuals()` releases them.
+- **Duplicated displacement math (Bug G)** — ATR/SMA/body/range metrics and threshold checks were computed in Section 12 *and* recomputed in Section 12.5. Consolidated to one block in Section 12; 12.5 now only adds the STRONG tier and grade/direction.
+- **RSI divergence (Bug H)** — old logic compared current RSI to a rolling 10-bar extreme that included the current bar, so both bull and bear conditions were true on most bars (±3 pts of random polarity). Rewritten as pivot-to-pivot: confirm a 5/5 price swing, sample RSI at that pivot bar, compare to the previous confirmed pivot.
+
+### Verified — no change
+- **News calendar day-of-week codes** — external reviewer claimed `:4`/`:3` fire a day late. Per Pine's session-string encoding (`1=Sun … 7=Sat`), `:4`=Wed (EIA Crude), `:3`=Tue (API Crude), `:5`=Thu (EIA Nat Gas) are correct. Live confirmation on a Wednesday crude session still welcome but not blocking.
+
+---
+
 ## [3.1.1] — 2026-08-28
 
 Wave 1 — scoring-integrity fixes from the external code review. File renamed `LSS-Pro-v3_1_0.pine` → `LSS-Pro-v3_1_1.pine`.

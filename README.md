@@ -6,10 +6,10 @@ LSS Pro is not just another liquidity sweep indicator — it's a complete instit
 
 ---
 
-## Current Version: v3.1.1 — Scoring-integrity fixes
+## Current Version: v3.1.2 — Correctness cleanup
 
-**Status:** Phase 4 complete; v3.1.1 patch fixes the scoring bugs found in review (HTF FVG/OB indexing, score cap, dashboard colour bands, win-rate expectancy).
-**Active file:** [`LSS-Pro-v3_1_1.pine`](LSS-Pro-v3_1_1.pine) (branch `develop`)
+**Status:** Phase 4 complete. v3.1.1 fixed the scoring bugs; v3.1.2 clears the remaining review items (directional trend alerts, closed-trade line leak, displacement dedup, RSI divergence).
+**Active file:** [`LSS-Pro-v3_1_2.pine`](LSS-Pro-v3_1_2.pine) (branch `develop`)
 **Next:** Phase 5 — Signal Quality & Visualization (see [Roadmap](#roadmap) and the [handover doc](LSS-Pro-v3_1_0-handover.md)).
 
 ### Engines Live
@@ -49,7 +49,7 @@ A separate Python + GitHub Actions service (private repo `Sriram0919/lss-news-mo
 | Quality Markers | ~15 | PDH/PDL sweep (5), OTE FVG CE in zone (5), Rejection candle (4), Inducement (3), OTE in zone (3) |
 | Supporting | ~10 | Pre-positioning bonus (8), News post-sweep bonus (5), RSI (3), Volume spike (3), OB proximity (3), Kill Zone (2), VWAP (2) |
 
-> v3.1.1: score is now capped at 100 and the dashboard colour bands were realigned to 70/55/40/25. Remaining review items (RSI divergence polarity, line-object leak, duplicated displacement math, alert placeholder) are tracked in the [handover doc](LSS-Pro-v3_1_0-handover.md#5-known-bugs--pending-issues).
+> v3.1.1–v3.1.2 cleared the full external-review backlog (Bugs A–H): score capped at 100, dashboard bands realigned, HTF FVG/OB indexing fixed, win-rate expectancy corrected, directional trend alerts, closed-trade line leak, displacement dedup, RSI divergence. See the [handover doc](LSS-Pro-v3_1_0-handover.md#5-known-bugs--pending-issues) and [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -67,6 +67,7 @@ A separate Python + GitHub Actions service (private repo `Sriram0919/lss-news-mo
 | v3.0.0 | MTF Intelligence — real HTF structure, HTF FVG/OB, HTF-weighted scoring | Done |
 | v3.1.0 | Score rescale 0–100, win-rate tracker, score-gated alerts, news pre-positioning | Done |
 | v3.1.1 | Scoring-integrity fixes (HTF FVG/OB indexing, score cap, dashboard bands, expectancy) | Done |
+| v3.1.2 | Correctness cleanup (trend alerts, line leak, displacement dedup, RSI divergence) | Done |
 | v3.2 / Phase 5 | Signal quality gates + weekly/HTF level visualization | Next |
 
 ### Phase 5 targets
@@ -100,7 +101,7 @@ The Confluence Scoring Engine is the core differentiator. Instead of binary BUY/
 ## Setup
 
 1. Open TradingView → Pine Editor
-2. Paste the contents of [`LSS-Pro-v3_1_1.pine`](LSS-Pro-v3_1_1.pine)
+2. Paste the contents of [`LSS-Pro-v3_1_2.pine`](LSS-Pro-v3_1_2.pine)
 3. Click **Add to Chart**
 4. Primary test instrument: **MCX Crude Oil 5m**. Also works on NIFTY / BANKNIFTY 5m and crypto (BTCUSDT / ETHUSDT) for after-hours testing.
 
@@ -132,7 +133,7 @@ Use TradingView's **Bar Replay** to test on historical data when markets are clo
 
 ```
 Liquidity-Sweep-System/
-  LSS-Pro-v3_1_1.pine            # active indicator (single file, ~4,000 lines)
+  LSS-Pro-v3_1_2.pine            # active indicator (single file, ~4,000 lines)
   LSS-Pro-v3_1_0-handover.md     # current session handover — read this first
   LSS-Pro-v3_0_0-handover.md     # historical handover
   LSS-Pro-v2.7.0-handover.md     # historical handover

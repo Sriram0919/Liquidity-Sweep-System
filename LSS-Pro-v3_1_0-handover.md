@@ -58,12 +58,12 @@ Next milestone is **Phase 5** — see Section 6 below.
 
 ## 3. Current Code State
 
-- **File:** `LSS-Pro-v3_1_1.pine` (was `LSS-Pro-v3_1_0.pine` through v3.1.0)
+- **File:** `LSS-Pro-v3_1_2.pine` (was `LSS-Pro-v3_1_0.pine` through v3.1.0)
 - **Repo:** `~/Documents/Liquidity-Sweep-System`, branch `develop`
-- **Indicator title:** `"LSS Pro v3.1.1"`
-- **VERSION constant:** `"v3.1.1"`
-- **Compilation status:** v3.1.0 compiled clean on MCX Crude Oil 5m. v3.1.1 edits are source-only — **recompile pending** (see Section 7).
-- **Latest commit:** Wave 1 scoring-integrity fixes (Bugs A–D) — v3.1.1
+- **Indicator title:** `"LSS Pro v3.1.2"`
+- **VERSION constant:** `"v3.1.2"`
+- **Compilation status:** v3.1.1 compiled clean on MCX Crude Oil 5m. v3.1.2 (Wave 2) edits are source-only — **recompile pending** (see Section 7).
+- **Latest tag:** `v3.1.1` (Wave 1). v3.1.2 committed to `develop`, tag pending compile check.
 
 ---
 
@@ -123,8 +123,10 @@ ATR_VAL declared (above Section 6B — shared by 6B and Section 13)
 
 ## 5. Known Bugs / Pending Issues
 
-> **v3.1.1 (2026-08-28) — Wave 1 fixed Bugs A, B, C, D.** Code is now `LSS-Pro-v3_1_1.pine`.
-> Remaining: Bugs E, F, G, H and the day-of-week verification (Wave 2).
+> **v3.1.1 (2026-08-28) — Wave 1 fixed Bugs A–D.**
+> **v3.1.2 (2026-08-28) — Wave 2 fixed Bugs E–H; day-of-week codes verified correct.**
+> Code is now `LSS-Pro-v3_1_2.pine`. **Entire external-review backlog is closed.**
+> Next: Wave 3 (Weekly H/L + HTF swing lines), then Phase 5 filters.
 
 ### From external code review (Aug 2026)
 
@@ -144,28 +146,26 @@ Bands were `101/81/61/41` (old ~285 scale). **Fix:** realigned to `70/55/40/25` 
 `wr_pct/100 * wr_avg_r - (1 - wr_pct/100)` — `wr_avg_r` is already net of losers.
 **Fix:** dropped that formula. Added `WR_R_WINS` accumulator. Tracker row 7 **Expectancy** = `wr_avg_r` (net R/trade); row 8 repurposed to **Avg Win** = `WR_R_WINS / wr_wins`. TP1+BE realised R now `IN_TRADE_TP1_RR * 0.5` (was `TRADE_RR * 0.5`).
 
-#### 🟠 OPEN — MEDIUM
+#### ✅ FIXED in v3.1.2
 
-**Bug E — Broken alert placeholder**
-```pinescript
-alertcondition(TREND_CHANGED, message = "... {{plot_0}} ...")
-```
-`{{plot_0}}` references a plotted series — `TREND_CHANGED` is not a plot. Message renders garbage. Fix: pass bias via a hidden `plot()`.
+**Bug E — Broken trend alert placeholder** 🟠
+`alertcondition(TREND_CHANGED, message = "... {{plot_0}} ...")` — `{{plot_0}}` had no matching plot.
+**Fix:** split into two const-message conditions gated on `HTF_BIAS == HTF_BIAS_BULL` / `_BEAR` → "HTF Trend flipped Bullish / Bearish".
 
-#### 🟡 MINOR
+**Bug F — Closed-trade line/box leak** 🟡
+On SL/TP2 close the code `label.delete()`d the labels then set `line`/`box` handles to `na` without deleting them → 4 lines + 2 boxes orphaned per trade.
+**Fix:** stop nulling the line/box handles at close; the next setup's `fn_clear_trade_visuals()` now deletes them. At most one closed trade's visuals linger.
 
-**Bug F — Closed-trade line objects leak**
-On SL/TP, labels are deleted and line handles set to `na`, but `line.delete()` is never called on the 4 lines + 2 boxes. These accumulate toward `max_lines_count=150` and eventually new liquidity/FVG lines silently fail to draw.
+**Bug G — Displacement computed twice** 🟡
+**Fix:** `DISP_ATR`, `DISP_VOL_SMA`, `disp_body`, `disp_range`, `disp_body_pct`, `disp_range_atr`, `disp_vol_ratio`, `disp_body_ok`, `disp_range_ok`, `disp_vol_ok`, `disp_all_ok` all declared once in Section 12's pre-declaration block; Section 12.5 reuses them and only adds the STRONG tier + `DISP_GRADE` / `DISP_DIR`.
 
-**Bug G — Displacement computed twice**
-Section 12 pre-declarations and Section 12.5 duplicate identical ATR/SMA/body math. Any threshold edit must be made in two places or sweep grading and FVG grading silently disagree.
+**Bug H — RSI divergence logic loose** 🟡
+Old comparison used a rolling 10-bar extreme that included the current bar → both conditions true on most bars.
+**Fix:** pivot-to-pivot. Confirm a `ta.pivotlow(low, 5, 5)` / `pivothigh`, sample `CONF_RSI[5]` at that pivot bar, compare price + RSI to the previous confirmed pivot. `rsi_bull_div` = price LL + RSI HL; `rsi_bear_div` = price HH + RSI LH.
 
-**Bug H — RSI divergence logic is loose**
-Bearish: `high[1] >= ta.highest(high, 10)[1]` is true most bars. Bullish uses different windows than price. This feeds ±3 points with essentially random polarity. Replace with proper pivot-based divergence or remove.
+#### ✅ VERIFIED — no change (v3.1.2)
 
-#### ℹ️ NOTES FROM REVIEW (verify before accepting)
-
-**Day-of-week codes** — Reviewer claimed `:4` = Thursday and `:3` = Wednesday (suggesting EIA/API fire one day late). Per Pine's actual encoding (`1=Sun … 7=Sat`), `:4` = Wednesday and `:3` = Tuesday, which *matches* EIA Crude (Wed) and API Crude (Tue). **Reviewer appears to be wrong here — verify against live chart before changing.**
+**Day-of-week codes** — Reviewer claimed `:4`/`:3` fire a day late. Pine session strings encode `1=Sun … 7=Sat`, so `:4`=Wed (EIA Crude), `:3`=Tue (API Crude), `:5`=Thu (EIA Nat Gas) — all correct, matching the comments. **Reviewer was wrong.** Live confirmation on a Wednesday crude session is still a nice-to-have.
 
 ### Pre-existing known issues (carried forward)
 - **HTF Bias showing "—" on fresh load** — expected until `ta.pivothigh/pivotlow` returns a confirmed value on RESOLVED_HTF. Not a bug.
@@ -214,23 +214,22 @@ Deferred:
 
 ## 7. Exact Next Task
 
-Wave 1 (Bugs A–D) is done in v3.1.1. Next:
+Waves 1–2 (Bugs A–H) are done in v3.1.1 / v3.1.2. Next:
 
-1. **Wave 2 — Bugs E, F, G, H** + verify the day-of-week codes on a live chart (see Section 5).
-2. **Wave 3 — Weekly High/Low chart lines**, then HTF swing level lines (`HTF_LAST_SH` / `HTF_LAST_SL`).
-3. **Wave 4 — Phase 5 signal-quality filters** (premium/discount equilibrium first).
+1. **Wave 3 — Weekly High/Low chart lines**, then HTF swing level lines (`HTF_LAST_SH` / `HTF_LAST_SL`).
+2. **Wave 4 — Phase 5 signal-quality filters** (premium/discount equilibrium first, then regime gate).
 
 **To verify state at start of new conversation:**
 ```bash
-grep -n "string VERSION\|HTF_HIGH_2\|Section 17\|WR_R_WINS\|ALT_PREPOS" LSS-Pro-v3_1_1.pine | head -20
+grep -n "string VERSION\|HTF_HIGH_2\|rsi_bull_div\|disp_all_ok\|flipped Bullish" LSS-Pro-v3_1_2.pine | head -20
 ```
-- `VERSION = "v3.1.1"`, `HTF_HIGH_2` found, `WR_R_WINS` found → Wave 1 landed → proceed to Wave 2
+- `VERSION = "v3.1.2"`, `HTF_HIGH_2` found, pivot-based `rsi_bull_div` found → Waves 1–2 landed → proceed to Wave 3
 
 ---
 
 ## 8. Files Needed
 
-**Primary file:** `LSS-Pro-v3_1_1.pine`
+**Primary file:** `LSS-Pro-v3_1_2.pine`
 - Repo: `~/Documents/Liquidity-Sweep-System`, branch `develop`
 
 **No other files required.** Entire indicator is single-file.
