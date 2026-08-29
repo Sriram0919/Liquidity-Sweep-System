@@ -1,5 +1,5 @@
 .venv/
-data/*.csv
+data/raw/
 __pycache__/
 *.pyc
 out/

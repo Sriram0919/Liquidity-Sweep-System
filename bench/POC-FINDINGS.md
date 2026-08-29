@@ -68,10 +68,27 @@ and generate live trades. Revised step-4 scope:
 News (11.5) and pre-positioning can stay stubbed for the first baseline
 (instrument-specific, ~13 pts, only active around EIA/API windows).
 
+## Data on hand (2026-08-29)
+
+| file | instrument | span | bars | volume |
+|---|---|---|---|---|
+| `data/banknifty_5m.csv` | NSE:NIFTY BANK spot | 2024-06 → 2026-08 (487 days, Sep-2024 partial) | 36,399 | **0** (index spot) |
+| `data/crude_5m.csv` | MCX CRUDEOIL26SEPFUT | 2026-06 → 2026-08 | 7,623 | real |
+
+Decision (user, 2026-08-29): run the baseline on **BankNifty spot 2yr**,
+volume-blind — most Phase 5 filters are price/structure based. Degrade the
+displacement gate to body%+range only; vol-spike / VWAP / sweep-grade
+factor-3 go neutral. Keep Crude as a fidelity cross-check. Pay for Kite
+Connect later, only for a final Crude validation run.
+
+Pulled via ~39 `mcp__Kite__get_historical_data` calls in ~18-day windows;
+raw JSON in `bench/data/raw/` (git-ignored), stitched by
+`scripts/stitch.py banknifty`.
+
 ## Reproduce
 
 ```bash
 cd bench
-.venv/bin/python -m bench.run_poc --csv data/mcx_crude_5m.csv --threshold 18 --entry-min 12
-.venv/bin/python -m bench.run_poc --csv data/mcx_crude_5m.csv --json   # score distribution
+.venv/bin/python -m bench.run_poc --csv data/banknifty_5m.csv --threshold 18 --entry-min 12
+.venv/bin/python -m bench.run_poc --csv data/crude_5m.csv --json   # score distribution
 ```
