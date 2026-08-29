@@ -89,8 +89,9 @@
 //
 // v3.2.0 — Phase 5 visualization (Wave 3)
 //   ✓ Previous Week High / Low lines (request.security "W", [high[1], low[1]])
-//   ✓ HTF last swing high / low lines (plots HTF_LAST_SH / HTF_LAST_SL)
-//   ✓ Three new input groups: Weekly Levels, HTF Swing Lines (toggles + colours)
+//   ✓ HTF last swing high / low lines (HTF_LAST_SH / HTF_LAST_SL)
+//   ✓ Drawn as line objects (redrawn on last bar) — script was at the 64-plot cap
+//   ✓ Two new input groups: Weekly Levels, HTF Swing Lines (toggles + colours)
 //   ✓ Filename frozen as LSS-Pro.pine — no more per-release renames
 // ============================================================
 
@@ -798,14 +799,22 @@ plot(IN_SHOW_PDH    ? PD_LOW  : na, title = "PDL",
      color = IN_COLOR_PDL, linewidth = 1, style = plot.style_stepline)
 
 // Weekly levels + HTF swing levels (v3.2.0)
-plot(IN_SHOW_PWHL   ? PW_HIGH : na, title = "PWH",
-     color = IN_COLOR_PWH, linewidth = 2, style = plot.style_stepline)
-plot(IN_SHOW_PWHL   ? PW_LOW  : na, title = "PWL",
-     color = IN_COLOR_PWL, linewidth = 2, style = plot.style_stepline)
-plot(IN_SHOW_HTF_SWINGS ? HTF_LAST_SH : na, title = "HTF Swing High",
-     color = IN_COLOR_HTF_SH, linewidth = 1, style = plot.style_stepline)
-plot(IN_SHOW_HTF_SWINGS ? HTF_LAST_SL : na, title = "HTF Swing Low",
-     color = IN_COLOR_HTF_SL, linewidth = 1, style = plot.style_stepline)
+// Drawn as line objects, NOT plot() — the script is already near the 64-plot
+// cap. Redrawn on the last bar only (cheap); extend right so they read as levels.
+var line PWH_LN   = na
+var line PWL_LN   = na
+var line HTFSH_LN = na
+var line HTFSL_LN = na
+
+fn_level_line(ln, show, y, c, w) =>
+    line.delete(ln)
+    show and not na(y) ? line.new(bar_index - 400, y, bar_index + 10, y, extend = extend.right, color = c, width = w) : na
+
+if barstate.islast
+    PWH_LN   := fn_level_line(PWH_LN,   IN_SHOW_PWHL,       PW_HIGH,     IN_COLOR_PWH,    2)
+    PWL_LN   := fn_level_line(PWL_LN,   IN_SHOW_PWHL,       PW_LOW,      IN_COLOR_PWL,    2)
+    HTFSH_LN := fn_level_line(HTFSH_LN, IN_SHOW_HTF_SWINGS, HTF_LAST_SH, IN_COLOR_HTF_SH, 1)
+    HTFSL_LN := fn_level_line(HTFSL_LN, IN_SHOW_HTF_SWINGS, HTF_LAST_SL, IN_COLOR_HTF_SL, 1)
 
 // ============================================================
 // SECTION 11.5 — NEWS CALENDAR ENGINE  (v2.7.0)

@@ -11,10 +11,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 Wave 3 — Phase 5 visualization. Filename frozen as `LSS-Pro.pine` (was `LSS-Pro-v3_1_2.pine`); from here the version lives only in the `VERSION` constant and git tags. Session handover renamed `HANDOVER.md`.
 
 ### Added
-- **Previous Week High / Low lines** — `request.security(…, "W", [high[1], low[1]])`, drawn as stepline plots. New input group *Weekly Levels* (toggle + two colours).
-- **HTF swing-level lines** — plots `HTF_LAST_SH` / `HTF_LAST_SL` from the Section 6 HTF Structure Engine as stepline levels. New input group *HTF Swing Lines* (toggle + two colours).
+- **Previous Week High / Low lines** — `request.security(…, "W", [high[1], low[1]])`. New input group *Weekly Levels* (toggle + two colours).
+- **HTF swing-level lines** — `HTF_LAST_SH` / `HTF_LAST_SL` from the Section 6 HTF Structure Engine. New input group *HTF Swing Lines* (toggle + two colours).
 
-Both are visual-only — no scoring or gating impact yet.
+Both drawn as `line` objects redrawn on the last bar (the script was already at Pine's 64-plot cap), and both visual-only — no scoring or gating impact yet.
 
 ---
 
