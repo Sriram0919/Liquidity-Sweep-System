@@ -186,10 +186,16 @@ Old comparison used a rolling 10-bar extreme that included the current bar → b
 ### Phase 5 — Signal Quality & Visualization
 
 Visualization — DONE (v3.2.0):
-- ~~Weekly High/Low lines~~ → PW_HIGH / PW_LOW stepline plots, group "Weekly Levels"
-- ~~HTF swing level lines~~ → HTF_LAST_SH / HTF_LAST_SL stepline plots, group "HTF Swing Lines"
+- ~~Weekly High/Low lines~~ → PW_HIGH / PW_LOW, group "Weekly Levels" (line objects, not plots — 64-plot cap)
+- ~~HTF swing level lines~~ → HTF_LAST_SH / HTF_LAST_SL, group "HTF Swing Lines"
 
-Signal-quality filters — NEXT (roughly in priority order):
+> **Before implementing the signal-quality filters below:** decision on 2026-08-29
+> to first build a **Python backtest bench** so each filter can be measured, not
+> guessed. Pine stays as the live layer. See `docs/Backtest-Bench-Plan.md`.
+> Next concrete step there = a proof-of-concept port (sweep + FVG + scoring core)
+> run on ~6 months of Kite Crude 5m data.
+
+Signal-quality filters — to validate in the backtest bench, then port back (priority order):
 1. **Premium/Discount equilibrium filter** — longs only below 50% of last impulse, shorts only above. Swings already exist (HTF_LAST_SH/SL + MS pivots). Highest expected hit-rate gain. **Do first.**
 2. **Range/trend regime filter** — suppress signals when ATR percentile < ~20th (chop) or > ~95th (chaos)
 3. **Sweep-to-FVG distance filter** — reject setups where the FVG is too far from the sweep
@@ -213,24 +219,32 @@ Deferred:
 
 ## 7. Exact Next Task
 
-Bug waves (A–H) done. Wave 3 (visualization) done in v3.2.0. Next:
+Bug waves (A–H) done. Wave 3 (visualization) done in v3.2.0.
+The Pine indicator is in a stable, releasable state.
 
-**Wave 4 — Premium/Discount equilibrium filter.**
-- Compute equilibrium = 50% of the most recent impulse leg (use MS swing pivots or HTF_LAST_SH/SL).
-- Gate: bull setups only when price is in *discount* (below EQ), bear setups only in *premium* (above EQ).
-- Wire into Section 15 scoring / Section 16 setup lifecycle, not as a hard block at first — add a score component + a dashboard row, evaluate, then decide if it should gate.
+**Next: NOT more Pine features.** Build the Python backtest bench first —
+see `docs/Backtest-Bench-Plan.md`.
 
-**To verify state at start of new conversation:**
+**Concrete next step = proof-of-concept:**
+- Port sweep detection + FVG + the 0–100 confluence score to Python.
+- Pull ~6 months of MCX Crude 5m candles via Kite (Connect API or Kite MCP).
+- Replicate the TP1/TP2/BE exit model so numbers match the live Win-Rate Tracker.
+- Produce a baseline win % / expectancy / drawdown.
+- Decide from that whether the full engine port is worth it.
+
+Only after the bench exists: implement the Phase 5 filters (Section 6 list),
+measure each one's delta in the backtest, port the winners back to `LSS-Pro.pine`.
+
+**To verify Pine state at start of a new conversation:**
 ```bash
-grep -n "string VERSION\|PW_HIGH\|IN_SHOW_HTF_SWINGS\|rsi_bull_div" LSS-Pro.pine | head -20
+grep -n "string VERSION\|PW_HIGH\|IN_SHOW_HTF_SWINGS\|fn_level_line" LSS-Pro.pine | head -20
 ```
-- `VERSION = "v3.2.0"`, `PW_HIGH` found, `IN_SHOW_HTF_SWINGS` found → Wave 3 landed → proceed to Wave 4
+- `VERSION = "v3.2.0"`, `PW_HIGH` + `fn_level_line` found → v3.2.0 confirmed
 
 ---
 
-## 8. Files Needed
+## 8. Files
 
-**Primary file:** `LSS-Pro.pine` (frozen name)
-- Repo: `~/Documents/Liquidity-Sweep-System`, branch `develop`
-
-**No other files required.** Entire indicator is single-file.
+- **Pine indicator:** `LSS-Pro.pine` (frozen name) — single file, the live/alert layer.
+- **Backtest bench:** not built yet — plan in `docs/Backtest-Bench-Plan.md`.
+- Repo: `~/Documents/Liquidity-Sweep-System`, branch `develop`.

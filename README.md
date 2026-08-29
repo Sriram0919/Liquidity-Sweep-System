@@ -69,7 +69,8 @@ A separate Python + GitHub Actions service (private repo `Sriram0919/lss-news-mo
 | v3.1.1 | Scoring-integrity fixes (HTF FVG/OB indexing, score cap, dashboard bands, expectancy) | Done |
 | v3.1.2 | Correctness cleanup (trend alerts, line leak, displacement dedup, RSI divergence) | Done |
 | v3.2.0 | Phase 5 visualization — Previous Week High/Low lines + HTF swing-level lines | Done |
-| Phase 5 (cont.) | Signal-quality filters | Next |
+| — | Python backtest bench (validate filters before building them) — see [plan](docs/Backtest-Bench-Plan.md) | Next |
+| Phase 5 (cont.) | Signal-quality filters (validated in the bench, then ported to Pine) | After |
 
 ### Phase 5 targets — remaining
 
@@ -142,6 +143,7 @@ Liquidity-Sweep-System/
   My_ideas.rtf                   # user feature backlog
   news-monitor-update.md         # companion News Monitor coverage changes
   docs/Architecture.md
+  docs/Backtest-Bench-Plan.md    # planned Python backtest bench (not started)
   LSS-Pro-v3_0_0-handover.md     # historical handovers
   LSS-Pro-v2.7.0-handover.md
   LSS-Pro-v2.5.0.pine            # archived v2.7.1 code
