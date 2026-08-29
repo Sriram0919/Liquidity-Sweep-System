@@ -75,9 +75,18 @@ CHoCH), 6/6B (HTF) and 16.7 (FVG-retest pipeline) are **not optional**.
 
 ## Open questions
 
-- Kite Connect subscription vs Kite MCP for historical data — confirm which we
-  use and whether it's already paid.
-- How far back does Kite give 5m candles for MCX Crude? (affects sample size)
+- **Data source — OPEN, blocks the baseline.** Tested 2026-08-29: the free
+  Kite MCP serves only currently-active instruments in ~20-day windows;
+  `continuous=true` and expired contracts both fail. So:
+  - MCX CRUDEOIL SEP future → ~6 clean weeks (liquid from mid-July; June is
+    mostly volume=0 placeholders).
+  - NSE:NIFTY BANK spot → 2+ years of 5m, but **volume always 0** (kills the
+    displacement gate + volume/sweep-grade/vol-spike/VWAP score components).
+  - Index/stock futures → current unexpired contract only (~2–3 months).
+  Options: (a) Kite Connect SDK paid (~₹2k/mo historical) for 2yr Crude 5m
+  with volume + continuous stitching; (b) run the baseline on BankNifty spot
+  with volume components stubbed; (c) another data vendor.  **User decision
+  pending.**
 - `backtesting.py` (simpler, single-asset, event-driven) vs `vectorbt`
   (faster, vectorised, better for parameter sweeps) — pick after the PoC.
 - Trade model: the Pine engine uses TP1/TP2/BE with `IN_TRADE_TP1_RR` /
