@@ -1,7 +1,8 @@
 // ============================================================
 // LSS PRO — Liquidity Sweep System
-// Version  : 3.1.2
-// Release  : Correctness cleanup (directional trend alerts, line-leak, displacement dedup, RSI divergence)
+// Version  : 3.2.0
+// Release  : Phase 5 visualization — weekly High/Low lines + HTF swing level lines
+// File     : LSS-Pro.pine  (version is the VERSION constant + git tag, not the filename)
 // Author   : Sriram0919
 // Repo     : https://github.com/Sriram0919/Liquidity-Sweep-System
 // Branch   : develop
@@ -85,11 +86,17 @@
 //       high/low comparison included the current bar → ±3 pts of random polarity
 //   ✓ Day-of-week note: session codes :4=Wed :3=Tue :5=Thu are CORRECT per
 //       Pine's 1=Sun…7=Sat encoding. Reviewer was wrong. No change.
+//
+// v3.2.0 — Phase 5 visualization (Wave 3)
+//   ✓ Previous Week High / Low lines (request.security "W", [high[1], low[1]])
+//   ✓ HTF last swing high / low lines (plots HTF_LAST_SH / HTF_LAST_SL)
+//   ✓ Three new input groups: Weekly Levels, HTF Swing Lines (toggles + colours)
+//   ✓ Filename frozen as LSS-Pro.pine — no more per-release renames
 // ============================================================
 
 //@version=6
 indicator(
-     title            = "LSS Pro v3.1.2",
+     title            = "LSS Pro v3.2.0",
      shorttitle       = "LSS Pro",
      overlay          = true,
      max_labels_count = 100,
@@ -101,7 +108,7 @@ indicator(
 // SECTION 1 — CONSTANTS
 // ============================================================
 
-string VERSION = "v3.1.2"
+string VERSION = "v3.2.0"
 
 // Trend States (EMA — visual only in v3.0.0, kept for EMA plots)
 string TREND_BULL    = "Bullish"
@@ -134,6 +141,7 @@ string TF_30M = "30"
 string TF_1H  = "60"
 string TF_4H  = "240"
 string TF_1D  = "1D"
+string TF_1W  = "W"
 
 // EMA Lengths
 int EMA_FAST_LEN = 50
@@ -224,6 +232,18 @@ string GRP_PDH = "═══ Previous Day Levels ═══"
 bool  IN_SHOW_PDH  = input.bool(true, "Show PDH / PDL", group = GRP_PDH)
 color IN_COLOR_PDH = input.color(color.new(#00C087, 85), "PDH Color", group = GRP_PDH)
 color IN_COLOR_PDL = input.color(color.new(#FF3B30, 85), "PDL Color", group = GRP_PDH)
+
+// ── Weekly Levels (v3.2.0) ───────────────────────────────────
+string GRP_PWK = "═══ Weekly Levels ═══"
+bool  IN_SHOW_PWHL  = input.bool(true, "Show Prev Week High / Low", group = GRP_PWK)
+color IN_COLOR_PWH  = input.color(color.new(#00C087, 70), "PWH Color", group = GRP_PWK)
+color IN_COLOR_PWL  = input.color(color.new(#FF3B30, 70), "PWL Color", group = GRP_PWK)
+
+// ── HTF Swing Level Lines (v3.2.0) ───────────────────────────
+string GRP_HTFSW = "═══ HTF Swing Lines ═══"
+bool  IN_SHOW_HTF_SWINGS = input.bool(true, "Show HTF Last Swing High / Low", group = GRP_HTFSW)
+color IN_COLOR_HTF_SH    = input.color(color.new(#5AC8FA, 55), "HTF Swing High Color", group = GRP_HTFSW)
+color IN_COLOR_HTF_SL    = input.color(color.new(#FF9F0A, 55), "HTF Swing Low Color", group = GRP_HTFSW)
 
 // ── HTF Engine ───────────────────────────────────────────────
 string GRP_HTF = "═══ HTF Engine ═══"
@@ -748,6 +768,12 @@ bool HTF_OB_BEAR_NEAR   = HTF_OB_BEAR_ACTIVE and
          [high[1], low[1]],
          lookahead = barmerge.lookahead_off)
 
+// Previous week high / low (v3.2.0) — [1] = last completed weekly bar
+[PW_HIGH, PW_LOW] =
+     request.security(syminfo.tickerid, TF_1W,
+         [high[1], low[1]],
+         lookahead = barmerge.lookahead_off)
+
 string MARKET_CONTEXT =
      close > PD_HIGH ? CTX_ABOVE :
      close < PD_LOW  ? CTX_BELOW :
@@ -770,6 +796,16 @@ plot(IN_SHOW_PDH    ? PD_HIGH : na, title = "PDH",
      color = IN_COLOR_PDH, linewidth = 1, style = plot.style_stepline)
 plot(IN_SHOW_PDH    ? PD_LOW  : na, title = "PDL",
      color = IN_COLOR_PDL, linewidth = 1, style = plot.style_stepline)
+
+// Weekly levels + HTF swing levels (v3.2.0)
+plot(IN_SHOW_PWHL   ? PW_HIGH : na, title = "PWH",
+     color = IN_COLOR_PWH, linewidth = 2, style = plot.style_stepline)
+plot(IN_SHOW_PWHL   ? PW_LOW  : na, title = "PWL",
+     color = IN_COLOR_PWL, linewidth = 2, style = plot.style_stepline)
+plot(IN_SHOW_HTF_SWINGS ? HTF_LAST_SH : na, title = "HTF Swing High",
+     color = IN_COLOR_HTF_SH, linewidth = 1, style = plot.style_stepline)
+plot(IN_SHOW_HTF_SWINGS ? HTF_LAST_SL : na, title = "HTF Swing Low",
+     color = IN_COLOR_HTF_SL, linewidth = 1, style = plot.style_stepline)
 
 // ============================================================
 // SECTION 11.5 — NEWS CALENDAR ENGINE  (v2.7.0)

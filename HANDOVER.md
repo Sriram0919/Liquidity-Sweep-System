@@ -1,9 +1,12 @@
-# LSS Pro v3.1.0 — Handover Document
+# LSS Pro — Handover Document
+
+_Living doc — updated each wave. Current as of v3.2.0 (2026-08-29)._
 
 ## 1. Current Objective
 Build LSS Pro — a Pine Script v6 TradingView indicator for Smart Money Concepts (ICT) trading.
-**Phase 4 (v3.1.0) is complete and compiled clean on MCX Crude Oil 5m.**
-Next milestone is **Phase 5** — see Section 6 below.
+**Phase 4 complete (v3.1.0). External-review backlog A–H closed (v3.1.1–v3.1.2).**
+**Phase 5 started: v3.2.0 shipped weekly H/L + HTF swing-level lines.**
+Next: Phase 5 signal-quality filters — see Section 6/7.
 
 ---
 
@@ -58,12 +61,11 @@ Next milestone is **Phase 5** — see Section 6 below.
 
 ## 3. Current Code State
 
-- **File:** `LSS-Pro-v3_1_2.pine` (was `LSS-Pro-v3_1_0.pine` through v3.1.0)
+- **File:** `LSS-Pro.pine` — **frozen filename**. Version = `VERSION` constant + git tag, never the filename.
 - **Repo:** `~/Documents/Liquidity-Sweep-System`, branch `develop`
-- **Indicator title:** `"LSS Pro v3.1.2"`
-- **VERSION constant:** `"v3.1.2"`
-- **Compilation status:** v3.1.1 compiled clean on MCX Crude Oil 5m. v3.1.2 (Wave 2) edits are source-only — **recompile pending** (see Section 7).
-- **Latest tag:** `v3.1.1` (Wave 1). v3.1.2 committed to `develop`, tag pending compile check.
+- **Indicator title / VERSION:** `"v3.2.0"`
+- **Compilation status:** v3.1.2 compiled clean on MCX Crude Oil 5m. v3.2.0 (Wave 3) edits are source-only — **recompile pending** (see Section 7).
+- **Tags:** `v3.1.0`, `v3.1.1`, `v3.1.2` on `main`. v3.2.0 committed to `develop`, tag pending compile check.
 
 ---
 
@@ -123,10 +125,9 @@ ATR_VAL declared (above Section 6B — shared by 6B and Section 13)
 
 ## 5. Known Bugs / Pending Issues
 
-> **v3.1.1 (2026-08-28) — Wave 1 fixed Bugs A–D.**
-> **v3.1.2 (2026-08-28) — Wave 2 fixed Bugs E–H; day-of-week codes verified correct.**
-> Code is now `LSS-Pro-v3_1_2.pine`. **Entire external-review backlog is closed.**
-> Next: Wave 3 (Weekly H/L + HTF swing lines), then Phase 5 filters.
+> **v3.1.1 — Wave 1 fixed Bugs A–D. v3.1.2 — Wave 2 fixed Bugs E–H** (day-of-week codes verified correct).
+> **Entire external-review backlog is closed.**
+> **v3.2.0 — Wave 3** added weekly H/L + HTF swing lines. Next: Phase 5 signal-quality filters.
 
 ### From external code review (Aug 2026)
 
@@ -182,23 +183,21 @@ Old comparison used a rolling 10-bar extreme that included the current bar → b
 - ~~Score-gated alerts~~ → done (v3.1.0)
 - ~~News pre-positioning engine~~ → done (v3.1.0)
 
-### Phase 5 — Signal Quality & Visualization (NEXT)
-Agreed capability gaps (from deep codebase review):
-1. **Sweep-to-FVG distance filter** — reject setups where FVG is too far from sweep
-2. **Entry candle quality gate** — require specific candle characteristics at entry
-3. **Session-aware ATR SL multiplier** — different ATR multiples per session
-4. **LTF+HTF FVG stack bonus scoring** — require LTF FVG to sit inside unmitigated HTF FVG
-5. **Consecutive loss suppression guard** — pause signals after N losses within M bars
-6. **Range/trend regime filter** — suppress signals in chop (ATR percentile < 20th) or chaos (> 95th)
+### Phase 5 — Signal Quality & Visualization
 
-Visualization gaps (agreed next build targets):
-- **Weekly High/Low lines** — draw as chart lines (agreed immediate next task)
-- **HTF swing level lines** — draw HTF_LAST_SH / HTF_LAST_SL as chart lines
+Visualization — DONE (v3.2.0):
+- ~~Weekly High/Low lines~~ → PW_HIGH / PW_LOW stepline plots, group "Weekly Levels"
+- ~~HTF swing level lines~~ → HTF_LAST_SH / HTF_LAST_SL stepline plots, group "HTF Swing Lines"
 
-Additional from external review (Tier 1 — high impact):
-- **Premium/Discount equilibrium filter** — longs only below 50% of last impulse, shorts only above. Already have swings, trivial to add. High expected hit-rate improvement.
-- **Volatility-regime gate** — ATR percentile filter (overlaps with gap #6 above)
-- **Day-of-week / time-of-day filters** — avoid Friday afternoon, first 2 bars of illiquid opens
+Signal-quality filters — NEXT (roughly in priority order):
+1. **Premium/Discount equilibrium filter** — longs only below 50% of last impulse, shorts only above. Swings already exist (HTF_LAST_SH/SL + MS pivots). Highest expected hit-rate gain. **Do first.**
+2. **Range/trend regime filter** — suppress signals when ATR percentile < ~20th (chop) or > ~95th (chaos)
+3. **Sweep-to-FVG distance filter** — reject setups where the FVG is too far from the sweep
+4. **Entry candle quality gate** — require specific candle characteristics at entry
+5. **Session-aware ATR SL multiplier** — different ATR multiples per session
+6. **LTF+HTF FVG stack bonus** — extra score when the LTF FVG sits inside an unmitigated HTF FVG
+7. **Consecutive-loss suppression guard** — pause signals after N losses within M bars
+8. **Day-of-week / time-of-day filter** — avoid Friday PM, first 2 bars of illiquid opens
 
 Deferred:
 - Score histogram
@@ -214,22 +213,24 @@ Deferred:
 
 ## 7. Exact Next Task
 
-Waves 1–2 (Bugs A–H) are done in v3.1.1 / v3.1.2. Next:
+Bug waves (A–H) done. Wave 3 (visualization) done in v3.2.0. Next:
 
-1. **Wave 3 — Weekly High/Low chart lines**, then HTF swing level lines (`HTF_LAST_SH` / `HTF_LAST_SL`).
-2. **Wave 4 — Phase 5 signal-quality filters** (premium/discount equilibrium first, then regime gate).
+**Wave 4 — Premium/Discount equilibrium filter.**
+- Compute equilibrium = 50% of the most recent impulse leg (use MS swing pivots or HTF_LAST_SH/SL).
+- Gate: bull setups only when price is in *discount* (below EQ), bear setups only in *premium* (above EQ).
+- Wire into Section 15 scoring / Section 16 setup lifecycle, not as a hard block at first — add a score component + a dashboard row, evaluate, then decide if it should gate.
 
 **To verify state at start of new conversation:**
 ```bash
-grep -n "string VERSION\|HTF_HIGH_2\|rsi_bull_div\|disp_all_ok\|flipped Bullish" LSS-Pro-v3_1_2.pine | head -20
+grep -n "string VERSION\|PW_HIGH\|IN_SHOW_HTF_SWINGS\|rsi_bull_div" LSS-Pro.pine | head -20
 ```
-- `VERSION = "v3.1.2"`, `HTF_HIGH_2` found, pivot-based `rsi_bull_div` found → Waves 1–2 landed → proceed to Wave 3
+- `VERSION = "v3.2.0"`, `PW_HIGH` found, `IN_SHOW_HTF_SWINGS` found → Wave 3 landed → proceed to Wave 4
 
 ---
 
 ## 8. Files Needed
 
-**Primary file:** `LSS-Pro-v3_1_2.pine`
+**Primary file:** `LSS-Pro.pine` (frozen name)
 - Repo: `~/Documents/Liquidity-Sweep-System`, branch `develop`
 
 **No other files required.** Entire indicator is single-file.

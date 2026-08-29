@@ -6,11 +6,11 @@ LSS Pro is not just another liquidity sweep indicator — it's a complete instit
 
 ---
 
-## Current Version: v3.1.2 — Correctness cleanup
+## Current Version: v3.2.0 — Phase 5 visualization
 
-**Status:** Phase 4 complete. v3.1.1 fixed the scoring bugs; v3.1.2 clears the remaining review items (directional trend alerts, closed-trade line leak, displacement dedup, RSI divergence).
-**Active file:** [`LSS-Pro-v3_1_2.pine`](LSS-Pro-v3_1_2.pine) (branch `develop`)
-**Next:** Phase 5 — Signal Quality & Visualization (see [Roadmap](#roadmap) and the [handover doc](LSS-Pro-v3_1_0-handover.md)).
+**Status:** External-review backlog (Bugs A–H) closed in v3.1.1–v3.1.2. v3.2.0 adds Previous Week High/Low lines and HTF swing-level lines on the chart.
+**Active file:** [`LSS-Pro.pine`](LSS-Pro.pine) — frozen filename; version is the `VERSION` constant + git tag.
+**Next:** Phase 5 signal-quality filters — premium/discount equilibrium first (see [Roadmap](#roadmap) and [HANDOVER.md](HANDOVER.md)).
 
 ### Engines Live
 
@@ -49,7 +49,7 @@ A separate Python + GitHub Actions service (private repo `Sriram0919/lss-news-mo
 | Quality Markers | ~15 | PDH/PDL sweep (5), OTE FVG CE in zone (5), Rejection candle (4), Inducement (3), OTE in zone (3) |
 | Supporting | ~10 | Pre-positioning bonus (8), News post-sweep bonus (5), RSI (3), Volume spike (3), OB proximity (3), Kill Zone (2), VWAP (2) |
 
-> v3.1.1–v3.1.2 cleared the full external-review backlog (Bugs A–H): score capped at 100, dashboard bands realigned, HTF FVG/OB indexing fixed, win-rate expectancy corrected, directional trend alerts, closed-trade line leak, displacement dedup, RSI divergence. See the [handover doc](LSS-Pro-v3_1_0-handover.md#5-known-bugs--pending-issues) and [CHANGELOG](CHANGELOG.md).
+> v3.1.1–v3.1.2 cleared the full external-review backlog (Bugs A–H): score capped at 100, dashboard bands realigned, HTF FVG/OB indexing fixed, win-rate expectancy corrected, directional trend alerts, closed-trade line leak, displacement dedup, RSI divergence. See the [handover doc](HANDOVER.md#5-known-bugs--pending-issues) and [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -68,15 +68,17 @@ A separate Python + GitHub Actions service (private repo `Sriram0919/lss-news-mo
 | v3.1.0 | Score rescale 0–100, win-rate tracker, score-gated alerts, news pre-positioning | Done |
 | v3.1.1 | Scoring-integrity fixes (HTF FVG/OB indexing, score cap, dashboard bands, expectancy) | Done |
 | v3.1.2 | Correctness cleanup (trend alerts, line leak, displacement dedup, RSI divergence) | Done |
-| v3.2 / Phase 5 | Signal quality gates + weekly/HTF level visualization | Next |
+| v3.2.0 | Phase 5 visualization — Previous Week High/Low lines + HTF swing-level lines | Done |
+| Phase 5 (cont.) | Signal-quality filters | Next |
 
-### Phase 5 targets
+### Phase 5 targets — remaining
 
+- Premium/discount equilibrium filter (longs only below 50% of last impulse) — **next**
+- Range/trend regime filter (ATR percentile — suppress chop and chaos)
 - Sweep-to-FVG distance filter; entry-candle quality gate
 - Session-aware ATR stop-loss multiplier
-- LTF+HTF FVG stack bonus; premium/discount equilibrium filter
-- Consecutive-loss suppression guard; range/trend regime filter (ATR percentile)
-- Weekly High/Low lines and HTF swing level lines drawn on the chart
+- LTF+HTF FVG stack bonus scoring
+- Consecutive-loss suppression guard
 
 ---
 
@@ -101,7 +103,7 @@ The Confluence Scoring Engine is the core differentiator. Instead of binary BUY/
 ## Setup
 
 1. Open TradingView → Pine Editor
-2. Paste the contents of [`LSS-Pro-v3_1_2.pine`](LSS-Pro-v3_1_2.pine)
+2. Paste the contents of [`LSS-Pro.pine`](LSS-Pro.pine)
 3. Click **Add to Chart**
 4. Primary test instrument: **MCX Crude Oil 5m**. Also works on NIFTY / BANKNIFTY 5m and crypto (BTCUSDT / ETHUSDT) for after-hours testing.
 
@@ -113,7 +115,7 @@ Use TradingView's **Bar Replay** to test on historical data when markets are clo
 - **Swing Lookback** — bars on each side of a pivot (also scales OTE lookback by timeframe)
 - **EQH/EQL Tolerance** — tick threshold for equal high/low classification
 - **News source** — auto (EIA Crude / API Crude / EIA Nat Gas by instrument) or manual
-- **Show/Hide** — BSL, SSL, FVG, OB, OTE, EMAs, PDH/PDL, Dashboard, Debug toggled independently
+- **Show/Hide** — BSL, SSL, FVG, OB, OTE, EMAs, PDH/PDL, Prev-Week H/L, HTF swing lines, Dashboard, Debug toggled independently
 - **HTF Mode** — auto-mapping (1m→15m, 5m→1H, …) or manual override
 - **Dashboard Position** — any corner
 
@@ -133,26 +135,28 @@ Use TradingView's **Bar Replay** to test on historical data when markets are clo
 
 ```
 Liquidity-Sweep-System/
-  LSS-Pro-v3_1_2.pine            # active indicator (single file, ~4,000 lines)
-  LSS-Pro-v3_1_0-handover.md     # current session handover — read this first
-  LSS-Pro-v3_0_0-handover.md     # historical handover
-  LSS-Pro-v2.7.0-handover.md     # historical handover
-  LSS-Pro-v2.5.0.pine            # archived v2.7.1 code (filename retained by convention)
-  news-monitor-update.md         # companion News Monitor coverage changes
-  My_ideas.rtf                   # user feature backlog
-  src/                           # archived early engine builds (v2.1.0 – v2.4.0)
-  docs/Architecture.md
-  README.md
+  LSS-Pro.pine                   # active indicator — single file, frozen name
+  HANDOVER.md                    # living session handover — read this first
   CHANGELOG.md
+  README.md
+  My_ideas.rtf                   # user feature backlog
+  news-monitor-update.md         # companion News Monitor coverage changes
+  docs/Architecture.md
+  LSS-Pro-v3_0_0-handover.md     # historical handovers
+  LSS-Pro-v2.7.0-handover.md
+  LSS-Pro-v2.5.0.pine            # archived v2.7.1 code
+  src/                           # archived early engine builds (v2.1.0 – v2.4.0)
 ```
+
+Version lives in the `VERSION` constant inside `LSS-Pro.pine` and in git tags (`vX.Y.Z`), not in the filename.
 
 ---
 
 ## Branch Strategy
 
-- `main` — stable releases only
-- `develop` — integration branch, all development happens here
-- `feature/*` — individual engine branches (merged into develop)
+- `main` — last version verified to compile clean; every release tagged `vX.Y.Z`
+- `develop` — all work happens here; merged to `main` after a TradingView compile check
+- No `feature/*` branches (solo project)
 
 ---
 
