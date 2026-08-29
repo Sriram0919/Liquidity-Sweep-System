@@ -60,11 +60,18 @@ validation environment.
 | Step | State |
 |---|---|
 | Decision recorded | ✅ 2026-08-29 |
-| Proof of concept | ⬜ not started |
-| Full engine port | ⬜ |
-| Baseline metrics | ⬜ |
+| Proof of concept | ✅ 2026-08-29 — `bench/`, see `bench/POC-FINDINGS.md` |
+| Full engine port | ⬜ next — revised scope in POC-FINDINGS (add Section 14, 6/6B, 16.7, 14.9) |
+| Baseline metrics | ⬜ blocked on full port + 2yr data |
 | Phase 5 filters evaluated in Python | ⬜ |
 | Winning set ported back to Pine | ⬜ |
+
+**PoC outcome:** pipeline works on real MCX Crude 5m data (Jun–Aug 2026,
+7.6k candles). Port translates cleanly. But the "sweep + FVG + scoring core"
+scope omits the components that gate/generate live trades — reduced score
+tops out at 36/100 (live threshold 55 admits nothing) and the
+confluence-signal-only entry path yields ~5 trades/3mo. Section 14 (BOS/
+CHoCH), 6/6B (HTF) and 16.7 (FVG-retest pipeline) are **not optional**.
 
 ## Open questions
 

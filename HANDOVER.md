@@ -222,18 +222,32 @@ Deferred:
 Bug waves (A–H) done. Wave 3 (visualization) done in v3.2.0.
 The Pine indicator is in a stable, releasable state.
 
-**Next: NOT more Pine features.** Build the Python backtest bench first —
+**Next: NOT more Pine features.** Build the Python backtest bench —
 see `docs/Backtest-Bench-Plan.md`.
 
-**Concrete next step = proof-of-concept:**
-- Port sweep detection + FVG + the 0–100 confluence score to Python.
-- Pull ~6 months of MCX Crude 5m candles via Kite (Connect API or Kite MCP).
-- Replicate the TP1/TP2/BE exit model so numbers match the live Win-Rate Tracker.
-- Produce a baseline win % / expectancy / drawdown.
-- Decide from that whether the full engine port is worth it.
+**Wave 4 (2026-08-29) — PoC DONE.** `bench/` holds the Python port of
+displacement + liquidity/sweep + FVG 5-state + reduced scoring + setup
+lifecycle + TP1/TP2/BE/SL exit model + metrics. Runs on real MCX Crude 5m
+data (`bench/data/mcx_crude_5m.csv`, Jun–Aug 2026, 7.6k candles from Kite MCP
+token 144870151). Full findings: `bench/POC-FINDINGS.md`.
 
-Only after the bench exists: implement the Phase 5 filters (Section 6 list),
-measure each one's delta in the backtest, port the winners back to `LSS-Pro.pine`.
+Key result: the port translates cleanly, but "sweep + FVG + scoring core"
+was too narrow — reduced score caps at 36/100 (live threshold 55 admits
+nothing) and the confluence-signal-only entry path fires ~5 trades/3mo.
+
+**Concrete next step = full engine port (revised scope):**
+- Port Section 14 (BOS / CHoCH / CHoCH+) — real structure bias
+- Port Section 6 + 6B (HTF structure + HTF FVG/OB via resampled candles)
+- Port Section 16.7 (FVG-retest entry pipeline — where most live trades come from)
+- Port Section 14.9 (OTE — cheap)
+- Full 0–100 score → live `conf_threshold=55` becomes comparable
+- Get 2+ yr data: kiteconnect SDK + continuous contract (MCP `continuous=true` fails;
+  MCP only serves front-month back to its liquid period)
+- Then produce the actual baseline win % / expectancy / max DD
+- News (11.5) + pre-positioning can stay stubbed for the first baseline
+
+Only after the baseline exists: implement the Phase 5 filters (Section 6
+list), measure each one's delta, port the winners back to `LSS-Pro.pine`.
 
 **To verify Pine state at start of a new conversation:**
 ```bash
@@ -246,5 +260,7 @@ grep -n "string VERSION\|PW_HIGH\|IN_SHOW_HTF_SWINGS\|fn_level_line" LSS-Pro.pin
 ## 8. Files
 
 - **Pine indicator:** `LSS-Pro.pine` (frozen name) — single file, the live/alert layer.
-- **Backtest bench:** not built yet — plan in `docs/Backtest-Bench-Plan.md`.
+- **Backtest bench:** `bench/` — Python PoC (Wave 4). Entry: `bench/bench/run_poc.py`.
+  Plan: `docs/Backtest-Bench-Plan.md`. Findings: `bench/POC-FINDINGS.md`.
+  `bench/.venv` + `bench/data/*.csv` are git-ignored.
 - Repo: `~/Documents/Liquidity-Sweep-System`, branch `develop`.
