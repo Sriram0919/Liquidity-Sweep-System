@@ -1,3 +1,75 @@
+# Findings
+
+## Wave 5 — full engine port + first baseline (2026-08-29)
+
+Ported the four remaining engines onto the bench:
+
+| Pine section | bench module | notes |
+|---|---|---|
+| 14 — BOS / CHoCH / CHoCH+ | `market_structure.py` | replaces the `structure.py` swing proxy; real `STRUCTURE_BIAS`, counter-trend FVG purge on CHoCH wired into `engine.py` |
+| 6 + 6B — HTF structure + HTF FVG/OB | `htf.py` | 5m→1H resample (`fn_resolve_htf`), HTF pivots 3/3, 1 active HTF FVG/OB per side, state updated at LTF resolution as in Pine 6B.4 |
+| 14.9 — Fibonacci OTE | `ote.py` | rolling highest/lowest + `ta.highestbars` offsets, 50/61.8/70.5 % |
+| 16.7 — FVG-retest entry pipeline | `trade.py` | same qualification gate as the confluence signal; `entered_zone = low[1]≤top ∧ close[1]≥bot ∧ low[2]>top` |
+| 13B — LTF order blocks | `engine.py` `_spawn_ob` | needed for the +3 OB-proximity score |
+| 15 — confluence score | `scoring.py` | **all 23 components** now ported (was ~12). News +5 / pre-pos +8 still stubbed. |
+
+### Result 1 — the full-engine score still tops out ~50 on index spot
+
+`banknifty_5m.csv` (volume-blind): score **max 50, p99 36, p90 28**.
+`crude_5m.csv` (real volume): max 55, p99 38.
+
+Even with every price/structure component ported, the live gates
+(`conf_threshold=55`, `entry_min_score=40`) are essentially unreachable —
+the components rarely co-occur on one bar, and volume-blind mode gives up
+the sweep vol-factor (A/B→C), vol-spike (+3) and VWAP (+2). **Absolute
+thresholds are not portable; they must be rescaled from the score
+distribution.** Rescale factor ≈ 0.55 (55→30, 40→20).
+
+### Result 2 — first baseline, BankNifty 2yr, rescaled 30 / 20
+
+```
+.venv/bin/python -m bench.run_poc --csv data/banknifty_5m.csv --threshold 30 --entry-min 20
+```
+
+| metric | value |
+|---|---|
+| closed trades | 26  (over 26 months ≈ 1/month) |
+| win % | 84.6  (TP2 15 / TP1+BE 7 / SL 4) |
+| total R | +29.5 |
+| expectancy | +1.14 R / trade |
+| max drawdown | 1.0 R |
+| setups created | 276 (signal 248 / retest 28) — **250 expired or invalidated** |
+
+### Result 3 — the churn is the signal-quality problem
+
+~90 % of setups expire at `setup_max_age` (20 bars) without price
+retracing to the FVG CE. The confluence-signal path fires far from usable
+FVGs and holds the single trade slot, starving the retest path (28 of 276).
+This is exactly what the Phase 5 filters target — **premium/discount
+equilibrium** and **sweep-to-FVG distance** should cut the expiring
+setups; measure each against this 30/20 baseline.
+
+### Caveats
+
+- 26 trades is too few for the win % to be trustworthy; treat as a smoke
+  test of the pipeline, not a validated edge.
+- Max DD 1.0R is suspiciously smooth — partly the same-bar-activation bias
+  (entry candle's own `[1]` can register TP) noted in Wave 4. A fill model
+  that requires activation strictly after the signal bar is the next
+  fidelity step.
+- News (11.5) + pre-positioning still stubbed (~13 pts, instrument-specific).
+
+### Reproduce
+
+```bash
+cd bench
+.venv/bin/python -m bench.run_poc --csv data/banknifty_5m.csv --threshold 30 --entry-min 20
+.venv/bin/python -m bench.run_poc --csv data/banknifty_5m.csv --json   # score distribution
+.venv/bin/python -m bench.run_poc --csv data/crude_5m.csv --threshold 30 --entry-min 20  # fidelity x-check
+```
+
+---
+
 # PoC Findings — Wave 4 (2026-08-29)
 
 Proof-of-concept Python port of the LSS Pro sweep + FVG + scoring core, run

@@ -1,21 +1,16 @@
-"""Setup lifecycle + TP1/TP2/BE/SL exit model — port of Pine Section 16 + 17.
+"""Setup lifecycle + exit model — port of Pine Section 15.4/15.5 + 16 + 17.
 
-Exit model (Pine 16.8) preserved exactly so R numbers are comparable to the
-live Win-Rate Tracker:
-  * monitoring evaluated on confirmed bar[1]
-  * same-bar SL/TP  -> SL priority (conservative)
-  * TP1 hit from ACTIVE -> move SL to breakeven (state TP1_HIT)
-  * BE hit after TP1   -> partial win, R = tp1_rr * 0.5   (Pine 17.2 Bug D fix)
-  * TP2 hit            -> full win,   R = tp2_rr
-  * SL hit             -> loss,       R = -1.0
+Now includes the FVG-retest entry pipeline (Section 16.7) in addition to the
+confluence-signal path (16.5). Single-slot state machine, matching Pine's
+per-bar section order: 16.5 create → 16.6 pending monitor → 16.7 retest →
+16.8 trade monitor (SL/TP/BE/expiry).
 
-Divergences from live (PoC scope):
-  * only confluence-signal setups; the FVG-retest pipeline (Pine 16.7) is
-    not ported -> fewer trades than live.
-  * best-FVG pick = active FVG (Fresh/First/CE) with CE nearest close;
-    Pine's fn_best_*_fvg heuristic not yet read/ported.
-  * SL finder mirrors fn_find_sl_bear (Pine 16): FVG boundary -> swept
-    opposing level -> nearest unswept opposing level -> ATR*1.5 fallback.
+Exit model (16.8) unchanged:
+  * monitoring on confirmed bar[1]
+  * same-bar SL/TP -> SL priority
+  * TP1 from ACTIVE -> SL to breakeven
+  * BE after TP1 -> partial win R = tp1_rr * 0.5
+  * TP2 -> full win R = tp2_rr ;  SL -> loss R = -1.0
 """
 from __future__ import annotations
 
@@ -23,11 +18,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .engine import Engine, BULL, BEAR, NONE, FRESH, FIRST_TOUCH, CE_TOUCH, MITIGATED
+from .engine import (Engine, BULL, BEAR, NONE, FRESH, FIRST_TOUCH, CE_TOUCH,
+                     DEEP_RETEST, MITIGATED)
 from .scoring import score_bar
 
-NONE_ST, PENDING, ACTIVE, TP1_HIT = "none", "pending", "active", "tp1_hit"
-CLOSED = {"tp2", "sl", "be", "expired", "invalid"}
+PENDING, ACTIVE, TP1_HIT = "pending", "active", "tp1_hit"
 
 
 @dataclass
@@ -42,6 +37,8 @@ class Trade:
     setup_score: int
     fvg_bot: float
     fvg_top: float
+    fvg_ref: object = None
+    source: str = "signal"          # "signal" | "retest"
     state: str = PENDING
     activate_bar: int = -1
     entry_score: int = 0
@@ -50,57 +47,61 @@ class Trade:
     r: float = 0.0
 
 
-def _best_fvg(fvgs, close, want):
-    """Prefer an FVG currently being tested (CE_TOUCH), then FIRST_TOUCH, then
-    FRESH; within a state, the one whose CE is nearest price. Mirrors the
-    live intent of entering the zone under test rather than a stale gap."""
-    order = {CE_TOUCH: 0, FIRST_TOUCH: 1, FRESH: 2}
-    cands = [f for f in fvgs if f.state in order]
+def _best_fvg(fvgs, close):
+    """Pine fn_best_*_fvg — nearest CE (|close[1]-ce|) among non-mitigated,
+    non-deep-retest FVGs."""
+    cands = [f for f in fvgs if f.state not in (MITIGATED, DEEP_RETEST)]
     if not cands:
         return None
-    return min(cands, key=lambda f: (order[f.state], abs(f.ce - close)))
+    return min(cands, key=lambda f: abs(f.ce - close))
 
 
-def _find_sl(eng: Engine, i, direction, entry, fvg_bound, buf):
-    """fvg_bound = fvg_bot (bull) or fvg_top (bear)."""
+def _find_sl(v, atrv, direction, entry, fvg_bound, buf):
+    """Port of fn_find_sl_bull / fn_find_sl_bear using the per-bar level
+    snapshot on the BarView (v.ssl_levels / v.bsl_levels = [(price, swept)])."""
     if direction == BULL:
-        c1 = fvg_bound - buf if np.isfinite(fvg_bound) else np.nan
-        if np.isfinite(c1) and c1 < entry:
-            return c1
+        if np.isfinite(fvg_bound):
+            c1 = fvg_bound - buf
+            if c1 < entry:
+                return c1
         best = np.nan
-        for lv in eng.ssl:                       # swept SSL below entry, closest
-            if lv.swept:
-                p = lv.price - buf
+        for price, swept in v.ssl_levels:            # swept SSL below entry
+            if swept:
+                p = price - buf
                 if p < entry and (not np.isfinite(best) or p > best):
                     best = p
         if not np.isfinite(best):
-            for lv in eng.ssl:
-                if not lv.swept:
-                    p = lv.price - buf
+            for price, swept in v.ssl_levels:
+                if not swept:
+                    p = price - buf
                     if p < entry and (not np.isfinite(best) or p > best):
                         best = p
         if not np.isfinite(best):
-            best = entry - eng.atr[i] * 1.5
+            best = entry - atrv * 1.5
         return best
     else:
-        c1 = fvg_bound + buf if np.isfinite(fvg_bound) else np.nan
-        if np.isfinite(c1) and c1 > entry:
-            return c1
+        if np.isfinite(fvg_bound):
+            c1 = fvg_bound + buf
+            if c1 > entry:
+                return c1
         best = np.nan
-        for lv in eng.bsl:
-            if lv.swept:
-                p = lv.price + buf
+        for price, swept in v.bsl_levels:
+            if swept:
+                p = price + buf
                 if p > entry and (not np.isfinite(best) or p < best):
                     best = p
         if not np.isfinite(best):
-            for lv in eng.bsl:
-                if not lv.swept:
-                    p = lv.price + buf
+            for price, swept in v.bsl_levels:
+                if not swept:
+                    p = price + buf
                     if p > entry and (not np.isfinite(best) or p < best):
                         best = p
         if not np.isfinite(best):
-            best = entry + eng.atr[i] * 1.5
+            best = entry + atrv * 1.5
         return best
+
+
+TERMINAL = {"tp2", "sl", "be", "expired", "invalid", ""}
 
 
 def run_trades(eng: Engine, views, cfg=None):
@@ -108,6 +109,7 @@ def run_trades(eng: Engine, views, cfg=None):
     trades: list[Trade] = []
     cur: Trade | None = None
     last_bull_sig = last_bear_sig = -10**9
+    last_setup_bar = -10**9
     scores = []
 
     for i, v in enumerate(views):
@@ -124,9 +126,121 @@ def run_trades(eng: Engine, views, cfg=None):
         h1 = eng._off(eng.h, i, 1)
         l1 = eng._off(eng.l, i, 1)
         c1 = eng._off(eng.c, i, 1)
+        h2 = eng._off(eng.h, i, 2)
+        l2 = eng._off(eng.l, i, 2)
 
-        # ── monitor open trade (Pine 16.8) ───────────────────
-        if cur and cur.state in (ACTIVE, TP1_HIT):
+        active_slot = cur is not None and cur.state in (PENDING, ACTIVE, TP1_HIT)
+        setup_created_this_bar = False
+
+        # ── 15.4/15.5 signal generation ──────────────────────
+        sig_bull = (bull >= cfg.conf_threshold and bull > bear
+                    and (i - last_bull_sig) >= cfg.signal_cooldown
+                    and v.bias in (BULL, NONE))
+        sig_bear = (bear >= cfg.conf_threshold and bear > bull
+                    and (i - last_bear_sig) >= cfg.signal_cooldown
+                    and v.bias in (BEAR, NONE))
+        if sig_bull:
+            last_bull_sig = i
+        if sig_bear:
+            last_bear_sig = i
+
+        can_create = not active_slot
+
+        # ── 16.5 setup creation from confluence signal ───────
+        if can_create and (sig_bull or sig_bear):
+            direction = BULL if sig_bull else BEAR
+            fvgs = v.bull_fvgs if direction == BULL else v.bear_fvgs
+            f = _best_fvg(fvgs, eng.c[i])
+            if f:
+                entry = f.ce
+                bound = f.bot if direction == BULL else f.top
+                sl = _find_sl(v, atrv, direction, entry, bound, buf)
+                risk = abs(entry - sl)
+                ok = (sl < entry if direction == BULL else sl > entry)
+                if ok and min_risk <= risk <= max_risk:
+                    sc = bull if direction == BULL else bear
+                    t = Trade(direction, entry, sl,
+                              entry + risk * cfg.tp1_rr * (1 if direction == BULL else -1),
+                              entry + risk * cfg.tp2_rr * (1 if direction == BULL else -1),
+                              risk, i, sc, f.bot, f.top, f, "signal", PENDING)
+                    # same-bar CE
+                    if direction == BULL and np.isfinite(l1) and l1 <= entry:
+                        t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+                    elif direction == BEAR and np.isfinite(h1) and h1 >= entry:
+                        t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+                    cur = t
+                    trades.append(t)
+                    last_setup_bar = i
+                    setup_created_this_bar = True
+
+        # ── 16.6 pending setup monitoring ───────────────────
+        if cur is not None and cur.state == PENDING and not setup_created_this_bar:
+            fvg_invalid = cur.fvg_ref is not None and cur.fvg_ref.state == MITIGATED
+            bias_invalid = ((cur.dir == BULL and v.bias == BEAR)
+                            or (cur.dir == BEAR and v.bias == BULL))
+            if cur.dir == BULL:
+                ce_touched = np.isfinite(c1) and l1 <= cur.entry and c1 > cur.fvg_bot
+            else:
+                ce_touched = np.isfinite(c1) and h1 >= cur.entry and c1 < cur.fvg_top
+            if fvg_invalid or bias_invalid:
+                cur.outcome, cur.state, cur.exit_bar = "invalid", "invalid", i
+                cur = None
+            elif ce_touched:
+                sc = bull if cur.dir == BULL else bear
+                if sc >= cfg.entry_min_score:
+                    cur.state = ACTIVE
+                    cur.activate_bar = i
+                    cur.entry_score = sc
+                else:
+                    cur.outcome, cur.state, cur.exit_bar = "invalid", "invalid", i
+                    cur = None
+            elif i - cur.created_bar > cfg.setup_max_age:
+                cur.outcome, cur.state, cur.exit_bar = "expired", "expired", i
+                cur = None
+
+        # ── 16.7 FVG retest — same pipeline ─────────────────
+        retest_slot_open = (not sig_bull and not sig_bear and not setup_created_this_bar
+                            and (cur is None or cur.state in TERMINAL)
+                            and v.active_session
+                            and (i - last_setup_bar) > cfg.retest_cooldown)
+        if retest_slot_open and v.bias in (BULL, BEAR):
+            direction = v.bias
+            fvgs = v.bull_fvgs if direction == BULL else v.bear_fvgs
+            for f in fvgs:
+                if f.state not in (FRESH, FIRST_TOUCH, CE_TOUCH):
+                    continue
+                if direction == BULL:
+                    entered = (np.isfinite(l1) and np.isfinite(l2)
+                               and l1 <= f.top and c1 >= f.bot and l2 > f.top)
+                else:
+                    entered = (np.isfinite(h1) and np.isfinite(h2)
+                               and h1 >= f.bot and c1 <= f.top and h2 < f.bot)
+                if not entered:
+                    continue
+                entry = f.ce
+                bound = f.bot if direction == BULL else f.top
+                sl = _find_sl(v, atrv, direction, entry, bound, buf)
+                risk = abs(entry - sl)
+                sc = bull if direction == BULL else bear
+                ok = (sl < entry if direction == BULL else sl > entry)
+                if not (ok and min_risk <= risk <= max_risk and sc >= cfg.entry_min_score):
+                    break
+                sign = 1 if direction == BULL else -1
+                t = Trade(direction, entry, sl,
+                          entry + risk * cfg.tp1_rr * sign,
+                          entry + risk * cfg.tp2_rr * sign,
+                          risk, i, sc, f.bot, f.top, f, "retest", PENDING)
+                ce_reached = (l1 <= entry) if direction == BULL else (h1 >= entry)
+                if ce_reached:
+                    t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+                cur = t
+                trades.append(t)
+                last_setup_bar = i
+                setup_created_this_bar = True
+                break
+
+        # ── 16.8 trade monitoring ──────────────────────────
+        if cur is not None and cur.state in (ACTIVE, TP1_HIT):
             if cur.dir == BULL:
                 hit_sl = (l1 <= cur.entry) if cur.state == TP1_HIT else (l1 <= cur.sl)
                 hit_tp2 = h1 >= cur.tp2
@@ -150,77 +264,8 @@ def run_trades(eng: Engine, views, cfg=None):
             elif hit_tp1 and cur.state == ACTIVE:
                 cur.state = TP1_HIT
             elif i - cur.activate_bar > cfg.trade_max_age:
-                cur.outcome, cur.state = "expired", "expired"
-                cur.exit_bar = i
+                cur.outcome, cur.state, cur.exit_bar = "expired", "expired", i
                 cur = None
-
-        # ── manage pending setup (Pine 16.6) ─────────────────
-        if cur and cur.state == PENDING:
-            mit = all(f.state == MITIGATED for f in (
-                v.bull_fvgs if cur.dir == BULL else v.bear_fvgs)) if (
-                v.bull_fvgs if cur.dir == BULL else v.bear_fvgs) else True
-            bias_flip = (cur.dir == BULL and v.bias == BEAR) or (cur.dir == BEAR and v.bias == BULL)
-            if cur.dir == BULL:
-                ce_touched = np.isfinite(c1) and l1 <= cur.entry and c1 > cur.fvg_bot
-            else:
-                ce_touched = np.isfinite(c1) and h1 >= cur.entry and c1 < cur.fvg_top
-            if mit or bias_flip:
-                cur.outcome, cur.state = "invalid", "invalid"
-                cur.exit_bar = i
-                cur = None
-            elif ce_touched:
-                sc = bull if cur.dir == BULL else bear
-                if sc >= cfg.entry_min_score:
-                    cur.state = ACTIVE
-                    cur.activate_bar = i
-                    cur.entry_score = sc
-                else:
-                    cur.outcome, cur.state = "invalid", "invalid"
-                    cur.exit_bar = i
-                    cur = None
-            elif i - cur.created_bar > cfg.setup_max_age:
-                cur.outcome, cur.state = "expired", "expired"
-                cur.exit_bar = i
-                cur = None
-
-        # ── new setup from confluence signal (Pine 16.5) ─────
-        can_create = cur is None
-        if can_create:
-            sig_bull = bull >= cfg.conf_threshold and bull > bear and (i - last_bull_sig) >= cfg.signal_cooldown and v.bias in (BULL, NONE)
-            sig_bear = bear >= cfg.conf_threshold and bear > bull and (i - last_bear_sig) >= cfg.signal_cooldown and v.bias in (BEAR, NONE)
-            new = None
-            if sig_bull:
-                f = _best_fvg(v.bull_fvgs, eng.c[i], BULL)
-                if f:
-                    entry = f.ce
-                    sl = _find_sl(eng, i, BULL, entry, f.bot, buf)
-                    risk = abs(entry - sl)
-                    if sl < entry and min_risk <= risk <= max_risk:
-                        new = Trade(BULL, entry, sl, entry + risk * cfg.tp1_rr,
-                                    entry + risk * cfg.tp2_rr, risk, i, bull, f.bot, f.top)
-                        last_bull_sig = i
-            elif sig_bear:
-                f = _best_fvg(v.bear_fvgs, eng.c[i], BEAR)
-                if f:
-                    entry = f.ce
-                    sl = _find_sl(eng, i, BEAR, entry, f.top, buf)
-                    risk = abs(sl - entry)
-                    if sl > entry and min_risk <= risk <= max_risk:
-                        new = Trade(BEAR, entry, sl, entry - risk * cfg.tp1_rr,
-                                    entry - risk * cfg.tp2_rr, risk, i, bear, f.bot, f.top)
-                        last_bear_sig = i
-            if new:
-                # same-bar CE (Pine 3151 / 3242-style)
-                if new.dir == BULL and np.isfinite(l1) and l1 <= new.entry:
-                    new.state = ACTIVE
-                    new.activate_bar = i
-                    new.entry_score = bull
-                elif new.dir == BEAR and np.isfinite(h1) and h1 >= new.entry:
-                    new.state = ACTIVE
-                    new.activate_bar = i
-                    new.entry_score = bear
-                cur = new
-                trades.append(new)
 
     eng.scores = scores
     return trades
@@ -237,7 +282,6 @@ def metrics(trades: list[Trade]) -> dict:
     r_total = sum(t.r for t in closed)
     r_wins = sum(t.r for t in closed if t.outcome in ("tp2", "be"))
 
-    # equity curve / max drawdown in R
     eq = np.cumsum([t.r for t in closed]) if closed else np.array([0.0])
     peak = np.maximum.accumulate(eq)
     max_dd = float((peak - eq).max()) if closed else 0.0
@@ -254,5 +298,7 @@ def metrics(trades: list[Trade]) -> dict:
         "max_dd_r": round(max_dd, 2),
         "avg_entry_score": round(np.mean([t.entry_score for t in closed]), 1) if total else 0.0,
         "setups_created": len(trades),
+        "from_signal": sum(t.source == "signal" for t in trades),
+        "from_retest": sum(t.source == "retest" for t in trades),
         "expired_or_invalid": len(trades) - total,
     }

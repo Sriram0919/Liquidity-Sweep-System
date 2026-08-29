@@ -25,6 +25,8 @@ def main(argv=None):
     ap.add_argument("--synthetic", action="store_true", help="use random-walk data")
     ap.add_argument("--threshold", type=int, help="override conf_threshold")
     ap.add_argument("--entry-min", type=int, help="override entry_min_score")
+    ap.add_argument("--mintick", type=float, help="instrument tick size")
+    ap.add_argument("--volume-blind", action="store_true", help="force volume-blind mode")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
@@ -43,6 +45,14 @@ def main(argv=None):
         over["conf_threshold"] = args.threshold
     if args.entry_min is not None:
         over["entry_min_score"] = args.entry_min
+    if args.mintick is not None:
+        over["mintick"] = args.mintick
+    # index spot has no real volume — auto-degrade the volume-based gates
+    vol_blind = args.volume_blind or (not args.synthetic and float(df["volume"].fillna(0).abs().sum()) == 0.0)
+    if vol_blind:
+        over["volume_blind"] = True
+        if args.mintick is None:
+            over["mintick"] = 0.05          # NSE index tick
     if over:
         cfg = Config(**{**cfg.__dict__, **over})
 
@@ -69,7 +79,7 @@ def main(argv=None):
     print(f"bars       : {m['bars']}   {m['date_range'][0]} .. {m['date_range'][1]}")
     print(f"threshold  : {cfg.conf_threshold}   (score pctiles {dist}, max {m['score_max']})")
     print("-" * 52)
-    print(f"setups created      : {m['setups_created']}")
+    print(f"setups created      : {m['setups_created']}  (signal {m['from_signal']} / retest {m['from_retest']})")
     print(f"  expired/invalid   : {m['expired_or_invalid']}")
     print(f"closed trades       : {m['trades']}")
     print(f"  TP2 (full win)    : {m['tp2_full']}")

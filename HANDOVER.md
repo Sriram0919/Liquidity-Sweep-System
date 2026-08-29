@@ -245,17 +245,31 @@ whole sample.
 - Kite MCP can't do better (`bench/scripts/fetch_kite.py`, [[kite-mcp-historical-limits]]);
   pay for Kite Connect later, only for a final Crude validation before Pine.
 
-**Concrete next step = full engine port (revised scope):**
-- Port Section 14 (BOS / CHoCH / CHoCH+) — real structure bias
-- Port Section 6 + 6B (HTF structure + HTF FVG/OB via resampled candles)
-- Port Section 16.7 (FVG-retest entry pipeline — where most live trades come from)
-- Port Section 14.9 (OTE — cheap)
-- Full 0–100 score → live `conf_threshold=55` becomes comparable
-- Then produce the actual baseline win % / expectancy / max DD on BankNifty 2yr
-- News (11.5) + pre-positioning stay stubbed for the first baseline
+**Wave 5 (2026-08-29) — full engine port DONE.** Ported Section 14
+(BOS/CHoCH/CHoCH+ → `bench/bench/market_structure.py`), Section 6+6B
+(HTF → `bench/bench/htf.py`, 5m→1H resample), Section 14.9 (OTE →
+`bench/bench/ote.py`), Section 16.7 (FVG-retest pipeline → `trade.py`),
+Section 13B (LTF OBs) and the full 23-component score (`scoring.py`).
+`structure.py` swing-proxy is superseded. Full findings:
+`bench/POC-FINDINGS.md`.
 
-Only after the baseline exists: implement the Phase 5 filters (Section 6
-list), measure each one's delta, port the winners back to `LSS-Pro.pine`.
+Key results:
+- Full-engine score still tops out ~50 (p99 36) on volume-blind BankNifty;
+  ~55 on Crude. Live `conf_threshold=55` / `entry_min_score=40` are
+  unreachable — **rescale ~0.55× from the score distribution** (55→30, 40→20).
+- **First baseline, BankNifty 2yr, rescaled 30/20:** 26 closed trades,
+  84.6% win, +29.5R, expectancy +1.14R, max DD 1.0R. BUT 250/276 setups
+  expire before CE retrace, and 26 trades is too few to trust the win %.
+- The expiring-setup churn IS the signal-quality gap — the Phase 5
+  premium/discount + sweep-to-FVG-distance filters target exactly it.
+
+**Concrete next step:**
+- Fix the same-bar-activation fill bias (require activation strictly after
+  the signal bar) so max-DD / SL counts are trustworthy.
+- Then implement Phase 5 filter #1 (premium/discount equilibrium) and #3
+  (sweep-to-FVG distance), measure each one's delta vs the 30/20 baseline.
+- News (11.5) + pre-positioning stay stubbed.
+- Port the winning filters back to `LSS-Pro.pine`.
 
 **To verify Pine state at start of a new conversation:**
 ```bash

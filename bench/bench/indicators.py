@@ -59,6 +59,36 @@ def session_vwap(df: pd.DataFrame) -> pd.Series:
     return out.where(cum_vol > 0, df["close"])
 
 
+def rsi_divergence(df: pd.DataFrame, rsi_ser, div_lb: int = 5):
+    """Pine 15.1 Bug-H port — pivot-to-pivot RSI divergence.
+
+    Confirm a price pivot (div_lb/div_lb legs), sample RSI at that pivot bar,
+    compare price + RSI to the previous confirmed pivot of the same kind.
+    Returns (bull_div, bear_div) bool numpy arrays, event-style (True only on
+    the confirmation bar).
+    """
+    pl = pivot_low(df["low"], div_lb, div_lb).to_numpy()
+    ph = pivot_high(df["high"], div_lb, div_lb).to_numpy()
+    rsi = np.asarray(rsi_ser, float)
+    n = len(rsi)
+    bull = np.zeros(n, bool)
+    bear = np.zeros(n, bool)
+    prev_pl_px = prev_pl_rsi = None
+    prev_ph_px = prev_ph_rsi = None
+    for i in range(n):
+        if np.isfinite(pl[i]):
+            r = rsi[i - div_lb] if i - div_lb >= 0 else np.nan
+            if prev_pl_px is not None and pl[i] < prev_pl_px and np.isfinite(r) and r > prev_pl_rsi:
+                bull[i] = True
+            prev_pl_px, prev_pl_rsi = pl[i], r
+        if np.isfinite(ph[i]):
+            r = rsi[i - div_lb] if i - div_lb >= 0 else np.nan
+            if prev_ph_px is not None and ph[i] > prev_ph_px and np.isfinite(r) and r < prev_ph_rsi:
+                bear[i] = True
+            prev_ph_px, prev_ph_rsi = ph[i], r
+    return bull, bear
+
+
 def pivot_high(high: pd.Series, left: int, right: int) -> pd.Series:
     """`ta.pivothigh`: value placed on the CONFIRMATION bar (pivot bar + right)."""
     h = high.to_numpy()

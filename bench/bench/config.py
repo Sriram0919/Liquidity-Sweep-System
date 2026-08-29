@@ -13,8 +13,29 @@ class Config:
     # ── Liquidity / swings (Pine 264, 266) ──────────────────────
     swing_lb: int = 5              # IN_SWING_LB
     eq_tol_ticks: float = 3.0      # IN_EQ_TOL  (× mintick)
-    swept_expiry: int = 60         # IN_SWEPT_EXPIRY (fallback; not user input in grep)
+    swept_expiry: int = 30         # IN_SWEPT_EXPIRY
     max_levels: int = 5            # FIFO cap per side (Pine: array.size >= 5)
+
+    # ── Market Structure — Section 14 (Pine 353, 355) ─────────
+    ms_swing_lb: int = 5          # IN_MS_SWING_LB
+    ms_max_lines: int = 3         # IN_MS_MAX_LINES (FIFO break history)
+    choch_disp_pct: float = 0.75  # IN_CHOCH_DISP_PCT (CHoCH+ body % gate)
+
+    # ── HTF engine — Section 6 / 6B (Pine 251, 458) ───────────
+    htf_period: str = "60min"    # RESOLVED_HTF for a 5m chart (fn_resolve_htf)
+    htf_pivot_lb: int = 3        # Pine 6.1: ta.pivothigh(high, 3, 3) on HTF
+
+    # ── Order Blocks — Section 13B (Pine 315-324) ─────────────
+    ob_lookback: int = 5         # IN_OB_LOOKBACK
+    ob_body_only: bool = True    # IN_OB_BODY_ONLY
+    ob_max_age: int = 50         # IN_OB_MAX_AGE
+    ob_mit_expiry: int = 10      # IN_OB_MIT_EXPIRY
+
+    # ── Retest pipeline — Section 16.7 ───────────────────────
+    retest_cooldown: int = 3     # RETEST_COOLDOWN
+
+    # ── Instrument mode ─────────────────────────────────────
+    volume_blind: bool = False   # index spot: no real volume — degrade vol gates
 
     # ── Displacement (Pine 329, 332, 335, 405) ─────────────────
     disp_body_min: float = 0.7     # IN_DISP_BODY_MIN
