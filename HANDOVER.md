@@ -227,13 +227,23 @@ see `docs/Backtest-Bench-Plan.md`.
 
 **Wave 4 (2026-08-29) — PoC DONE.** `bench/` holds the Python port of
 displacement + liquidity/sweep + FVG 5-state + reduced scoring + setup
-lifecycle + TP1/TP2/BE/SL exit model + metrics. Runs on real MCX Crude 5m
-data (`bench/data/mcx_crude_5m.csv`, Jun–Aug 2026, 7.6k candles from Kite MCP
-token 144870151). Full findings: `bench/POC-FINDINGS.md`.
+lifecycle + TP1/TP2/BE/SL exit model + metrics. Full findings:
+`bench/POC-FINDINGS.md`.
 
 Key result: the port translates cleanly, but "sweep + FVG + scoring core"
-was too narrow — reduced score caps at 36/100 (live threshold 55 admits
-nothing) and the confluence-signal-only entry path fires ~5 trades/3mo.
+was too narrow — reduced score caps ~29–36/100 (live threshold 55 admits
+nothing) and the confluence-signal-only entry path fires ~5 trades over the
+whole sample.
+
+**Data — IN HAND** (`bench/data/`, git-committed CSVs):
+- `banknifty_5m.csv` — NIFTY BANK spot, 2024-06 → 2026-08, 36,399 bars.
+  **Baseline instrument** (user decision 2026-08-29). Volume-blind (index
+  spot) — degrade displacement gate to body%+range, neutralise vol-spike /
+  VWAP / sweep-grade factor-3. Most Phase 5 filters are price-based, so OK.
+- `crude_5m.csv` — MCX SEP future, 2026-06 → 2026-08, 7,623 bars, real
+  volume. Fidelity cross-check only (too short for stats).
+- Kite MCP can't do better (`bench/scripts/fetch_kite.py`, [[kite-mcp-historical-limits]]);
+  pay for Kite Connect later, only for a final Crude validation before Pine.
 
 **Concrete next step = full engine port (revised scope):**
 - Port Section 14 (BOS / CHoCH / CHoCH+) — real structure bias
@@ -241,10 +251,8 @@ nothing) and the confluence-signal-only entry path fires ~5 trades/3mo.
 - Port Section 16.7 (FVG-retest entry pipeline — where most live trades come from)
 - Port Section 14.9 (OTE — cheap)
 - Full 0–100 score → live `conf_threshold=55` becomes comparable
-- Get 2+ yr data: kiteconnect SDK + continuous contract (MCP `continuous=true` fails;
-  MCP only serves front-month back to its liquid period)
-- Then produce the actual baseline win % / expectancy / max DD
-- News (11.5) + pre-positioning can stay stubbed for the first baseline
+- Then produce the actual baseline win % / expectancy / max DD on BankNifty 2yr
+- News (11.5) + pre-positioning stay stubbed for the first baseline
 
 Only after the baseline exists: implement the Phase 5 filters (Section 6
 list), measure each one's delta, port the winners back to `LSS-Pro.pine`.
