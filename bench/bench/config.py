@@ -50,6 +50,9 @@ class Config:
     # ── Phase 5 signal-quality filters (0 / False = off) ─────
     pd_filter: bool = False       # #1 premium/discount: longs in discount only
     dist_filter_atr: float = 0.0  # #3 sweep→FVG distance ceiling, in ATR (0 = off)
+    regime_filter: bool = False   # #2 suppress when ATR pctile <20 (chop) / >95 (chaos)
+    regime_lookback: int = 200    #    window for the ATR percentile
+    candle_filter: float = 0.0    # #4 min body% of the signal candle bar[1] (0 = off)
     fill_strict: bool = True      # exit monitoring starts strictly AFTER the
                                   # activation bar (removes same-candle fill+exit)
 

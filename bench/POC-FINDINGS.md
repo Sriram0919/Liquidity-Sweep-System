@@ -41,13 +41,21 @@ fib math, inducement, PDH/PDL, recent-event windows) matched Pine.
   win rate than market, DD still low — but retains mild selection bias
   (~40 % of setups still expire).
 
-### Phase 5 filters #1 and #3 — still no edge (now on 4 samples)
+### Phase 5 filters — only #4 (entry-candle) shows anything
 
-Tested against both entry models on both pools. Premium/discount (#1) and
-sweep-distance (#3) each cut trade count 50–90 % and move expectancy
-inconsistently (−0.3 R here, +0.25 R there, n often < 30). **No repeatable
-improvement.** The roadmap's "premium/discount = biggest gain" premise is
-not supported by any sample we've run.
+Tested against both entry models on both pools (threshold 22/15):
+
+| filter | 1h market Δexp | 5m market Δexp | verdict |
+|---|---|---|---|
+| #1 premium/discount | +1.20→+1.07 | +1.04→+1.17 | noise, huge trade cut |
+| #2 ATR-regime (skip pctile <20 / >95) | +1.20→+1.13 | +1.04→+1.04 | no help |
+| #3 sweep-distance ≤3 ATR | +1.20→+1.10 | +1.04→+1.24 | noise, huge trade cut |
+| **#4 signal-candle body ≥ 50 %** | **+1.20→+1.29, DD 2.0→1.0** | +1.04→+0.97 | **3 of 4 samples better; DD consistently halved** |
+
+`#4` is the only filter with a repeatable signal — a modest expectancy
+bump and a **consistent drawdown reduction** (2.0→1.0 R) — and it's cheap
+(one candle check). The 5m/market sample is the lone dissenter (added
+timeouts). Worth carrying forward; the other three are not.
 
 ### Remaining caveat
 
@@ -61,9 +69,8 @@ the error at a few points, not tens. A tighter check needs 1m data.
 1. **Change the Pine indicator's entry model** — or add `market` /
    `edge_limit` as an input alongside the CE limit. The retrace-and-fill
    model misses ~90 % of the strategy's own signals.
-2. **Drop Phase 5 filters #1 and #3** from the roadmap unless a much larger
-   sample resurrects them. Spend the effort on #2 (regime) / #4 (entry
-   candle) instead, or on tightening the exit model.
+2. **Drop Phase 5 filters #1, #2, #3.** Keep **#4 (signal-candle body ≥
+   50 %)** — the only one that repeatably helps (small +exp, DD halved).
 3. If porting `market` entry to Pine: it removes the pending-setup state
    machine entirely — simpler code.
 

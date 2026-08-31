@@ -121,6 +121,27 @@ def _passes_filters(cfg, v, eng, i, direction, f, entry, atrv) -> bool:
             return False
         if abs(entry - swept_px) / atrv > cfg.dist_filter_atr:
             return False
+
+    # #2 — regime: skip chop (ATR pctile < 20) and chaos (> 95)
+    if cfg.regime_filter:
+        p = eng.atr_pctile[i]
+        if not np.isfinite(p) or p < 20.0 or p > 95.0:
+            return False
+
+    # #4 — entry-candle quality: signal candle bar[1] must be a decisive,
+    # correctly-directed body.
+    if cfg.candle_filter > 0:
+        o1, h1, l1, c1 = (eng._off(a, i, 1) for a in (eng.o, eng.h, eng.l, eng.c))
+        rng = h1 - l1
+        if not (np.isfinite(c1) and rng > 0):
+            return False
+        body_pct = abs(c1 - o1) / rng
+        if body_pct < cfg.candle_filter:
+            return False
+        if direction == BULL and c1 <= o1:
+            return False
+        if direction == BEAR and c1 >= o1:
+            return False
     return True
 
 

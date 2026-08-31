@@ -137,6 +137,14 @@ class Engine:
         self._sess_lo = int(np.percentile(_mod, 0.5))
         self._sess_hi = int(np.percentile(_mod, 99.5))
 
+        # trailing ATR percentile rank (Phase 5 #2 regime filter), vectorised
+        _lb = self.cfg.regime_lookback
+        _a = self.atr
+        self.atr_pctile = np.full(len(_a), np.nan)
+        if len(_a) >= _lb:
+            sw = np.lib.stride_tricks.sliding_window_view(_a, _lb)
+            self.atr_pctile[_lb - 1:] = 100.0 * (sw < sw[:, -1:]).mean(axis=1)
+
         # OTE rolling precompute (Section 14.9)
         self.ote_lb = self.cfg.ms_swing_lb * self.cfg.ote_tf_mult
         self._ote_rh, self._ote_rl, self._ote_ho, self._ote_lo = ote_mod.precompute(

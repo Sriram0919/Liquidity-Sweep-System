@@ -68,15 +68,19 @@ def main(argv=None):
 
     base = {"conf_threshold": args.threshold, "entry_min_score": args.entry_min}
 
+    M = {"entry_model": "market"}
+    E = {"entry_model": "edge_limit"}
     variants = [
         ("ce_limit (Pine)",          {}),
-        ("ce_limit Pine-literal",     {"fill_strict": False}),
-        ("edge_limit",               {"entry_model": "edge_limit"}),
-        ("market",                   {"entry_model": "market"}),
-        ("market + #1 P/D",          {"entry_model": "market", "pd_filter": True}),
-        ("market + #3 dist3ATR",     {"entry_model": "market", "dist_filter_atr": 3.0}),
-        ("edge_limit + #1 P/D",      {"entry_model": "edge_limit", "pd_filter": True}),
-        ("edge_limit + #3 dist3ATR", {"entry_model": "edge_limit", "dist_filter_atr": 3.0}),
+        ("edge_limit",               E),
+        ("market",                   M),
+        ("market + #1 P/D",          {**M, "pd_filter": True}),
+        ("market + #2 regime",       {**M, "regime_filter": True}),
+        ("market + #3 dist3ATR",     {**M, "dist_filter_atr": 3.0}),
+        ("market + #4 candle .5",    {**M, "candle_filter": 0.5}),
+        ("market + #2 + #4",         {**M, "regime_filter": True, "candle_filter": 0.5}),
+        ("edge_limit + #2 regime",   {**E, "regime_filter": True}),
+        ("edge_limit + #4 candle .5", {**E, "candle_filter": 0.5}),
     ]
 
     hdr = (f"{'variant':<24} {'trades':>6} {'w/l/to':>10} {'win%':>6} {'totR':>8} "
