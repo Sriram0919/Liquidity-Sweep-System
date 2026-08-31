@@ -24,6 +24,35 @@ from bench.trade import run_trades, metrics
 DATA = pathlib.Path(__file__).resolve().parent.parent / "data"
 
 
+def _cfg_for(csv, over, tf1h):
+    df = load_candles(csv)
+    o = dict(over)
+    if tf1h:
+        o.setdefault("ote_tf_mult", 8)
+        o.setdefault("htf_period", "1D")
+    if float(df["volume"].fillna(0).abs().sum()) == 0.0:
+        o["volume_blind"] = True
+        o.setdefault("mintick", 0.05)
+    return df, Config(**{**Config().__dict__, **o})
+
+
+def breakdown(csvs, base_over, extra, tf1h):
+    """Per-instrument stats for one config — is the edge broad or concentrated?"""
+    over = {**base_over, **extra}
+    print(f"\n{'instrument':<14} {'trades':>6} {'win%':>6} {'exp':>6} {'totR':>8}")
+    print("-" * 44)
+    pos = 0
+    for c in csvs:
+        df, cfg = _cfg_for(c, over, tf1h)
+        eng = Engine(df, cfg)
+        m = metrics(run_trades(eng, eng.run(), cfg))
+        if m["trades"]:
+            pos += m["expectancy_r"] > 0
+            print(f"{pathlib.Path(c).stem:<14} {m['trades']:>6} {m['win_pct']:>6} "
+                  f"{m['expectancy_r']:>+6.2f} {m['total_r']:>+8.1f}")
+    print(f"\n{pos}/{len(csvs)} instruments net-positive expectancy\n")
+
+
 def run_variant(csvs, base_over, extra, tf1h):
     over = {**base_over, **extra}
     if tf1h:
@@ -50,6 +79,8 @@ def main(argv=None):
     ap.add_argument("--tf5m", action="store_true", help="pool is 5m data (keep 5m OTE/HTF tuning)")
     ap.add_argument("--threshold", type=int, default=30)
     ap.add_argument("--entry-min", type=int, default=20)
+    ap.add_argument("--breakdown", metavar="MODEL",
+                    help="per-instrument stats for one entry model (market/edge_limit/ce_limit)")
     args = ap.parse_args(argv)
 
     if args.pool:
@@ -67,6 +98,15 @@ def main(argv=None):
         tf1h = False
 
     base = {"conf_threshold": args.threshold, "entry_min_score": args.entry_min}
+
+    if args.breakdown:
+        extra = {"entry_model": args.breakdown}
+        if args.breakdown == "market":
+            extra["candle_filter"] = 0.5     # the one filter that survived
+        print(f"\n{label}   threshold {args.threshold}/{args.entry_min}   "
+              f"model={args.breakdown}" + ("  +#4 candle.5" if args.breakdown == "market" else ""))
+        breakdown(csvs, base, extra, tf1h)
+        return
 
     M = {"entry_model": "market"}
     E = {"entry_model": "edge_limit"}

@@ -57,6 +57,14 @@ bump and a **consistent drawdown reduction** (2.0→1.0 R) — and it's cheap
 (one candle check). The 5m/market sample is the lone dissenter (added
 timeouts). Worth carrying forward; the other three are not.
 
+### The market-entry edge is broad, not one lucky instrument
+
+`scripts/phase5.py --pool --breakdown market` (threshold 16/11, 1h/2yr):
+**26 / 26 instruments net-positive expectancy**, 5–17 trades each,
+per-instrument expectancy +0.5 to +1.85 R, win 62–100 %. The weakest
+(POWERGRID, 62.5 % win) is still +0.69 R. 26 independent symbols all
+positive is hard to explain by curve-fit or outlier.
+
 ### Remaining caveat
 
 The 85–88 % win rate on `market` still carries intrabar optimism — with no
