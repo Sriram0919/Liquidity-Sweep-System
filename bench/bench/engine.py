@@ -96,6 +96,13 @@ class BarView:
     ote_fvg_ce_in: bool = False
     ob_bull_near: bool = False
     ob_bear_near: bool = False
+    equilibrium: float = float("nan")     # 50% of the recent swing (Phase-5 P/D filter)
+    swing_high: float = float("nan")
+    swing_low: float = float("nan")
+    last_ssl_sweep_px: float = float("nan")
+    last_bsl_sweep_px: float = float("nan")
+    last_ssl_sweep_bar: int = -10**9
+    last_bsl_sweep_bar: int = -10**9
     htf: HTFView = field(default_factory=HTFView)
     bull_fvgs: list = field(default_factory=list)
     bear_fvgs: list = field(default_factory=list)
@@ -140,6 +147,8 @@ class Engine:
 
         self.last_ssl_sweep_bar = -10**9
         self.last_bsl_sweep_bar = -10**9
+        self.last_ssl_sweep_px = np.nan
+        self.last_bsl_sweep_px = np.nan
         self.last_ssl_grade = SWEEP_C
         self.last_bsl_grade = SWEEP_C
 
@@ -239,6 +248,7 @@ class Engine:
                 lv.grade = grade(self.bsl, idx, c1 < lv.price, disp_bear)
                 self.last_bsl_grade = lv.grade
                 self.last_bsl_sweep_bar = i
+                self.last_bsl_sweep_px = lv.price
                 evt_bsl = True
         for idx, lv in enumerate(self.ssl):
             if lv.swept:
@@ -249,6 +259,7 @@ class Engine:
                 lv.grade = grade(self.ssl, idx, c1 > lv.price, disp_bull)
                 self.last_ssl_grade = lv.grade
                 self.last_ssl_sweep_bar = i
+                self.last_ssl_sweep_px = lv.price
                 evt_ssl = True
 
         self.bsl = [x for x in self.bsl if not (x.swept and i - x.swept_bar > cfg.swept_expiry)]
@@ -512,6 +523,12 @@ class Engine:
                 ctx_above=bool(ctx_above), ctx_below=bool(ctx_below),
                 ote_price_in_zone=bool(ote_price_in), ote_fvg_ce_in=ote_fvg_ce_in,
                 ob_bull_near=ob_bull_near, ob_bear_near=ob_bear_near,
+                equilibrium=(self._ote_rh[i] + self._ote_rl[i]) / 2.0,
+                swing_high=self._ote_rh[i], swing_low=self._ote_rl[i],
+                last_ssl_sweep_px=self.last_ssl_sweep_px,
+                last_bsl_sweep_px=self.last_bsl_sweep_px,
+                last_ssl_sweep_bar=self.last_ssl_sweep_bar,
+                last_bsl_sweep_bar=self.last_bsl_sweep_bar,
                 htf=hv,
                 bull_fvgs=[f for f in self.bull_fvg],
                 bear_fvgs=[f for f in self.bear_fvg],

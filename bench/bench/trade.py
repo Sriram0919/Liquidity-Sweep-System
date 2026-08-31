@@ -101,6 +101,29 @@ def _find_sl(v, atrv, direction, entry, fvg_bound, buf):
         return best
 
 
+def _passes_filters(cfg, v, eng, i, direction, f, entry, atrv) -> bool:
+    """Phase 5 signal-quality gates. Each is opt-in via Config."""
+    # #1 — premium/discount equilibrium: longs only in discount (below the
+    # 50% of the recent swing), shorts only in premium.
+    if cfg.pd_filter and np.isfinite(v.equilibrium):
+        if direction == BULL and entry > v.equilibrium:
+            return False
+        if direction == BEAR and entry < v.equilibrium:
+            return False
+
+    # #3 — sweep→FVG distance: the entry FVG must be a post-sweep gap whose
+    # CE sits within dist_filter_atr ATR of the swept level that spawned it.
+    if cfg.dist_filter_atr > 0:
+        if not f.post_sweep:
+            return False
+        swept_px = v.last_ssl_sweep_px if direction == BULL else v.last_bsl_sweep_px
+        if not np.isfinite(swept_px) or not np.isfinite(atrv) or atrv <= 0:
+            return False
+        if abs(entry - swept_px) / atrv > cfg.dist_filter_atr:
+            return False
+    return True
+
+
 TERMINAL = {"tp2", "sl", "be", "expired", "invalid", ""}
 
 
@@ -157,7 +180,8 @@ def run_trades(eng: Engine, views, cfg=None):
                 sl = _find_sl(v, atrv, direction, entry, bound, buf)
                 risk = abs(entry - sl)
                 ok = (sl < entry if direction == BULL else sl > entry)
-                if ok and min_risk <= risk <= max_risk:
+                if ok and min_risk <= risk <= max_risk and _passes_filters(
+                        cfg, v, eng, i, direction, f, entry, atrv):
                     sc = bull if direction == BULL else bear
                     t = Trade(direction, entry, sl,
                               entry + risk * cfg.tp1_rr * (1 if direction == BULL else -1),
@@ -223,7 +247,8 @@ def run_trades(eng: Engine, views, cfg=None):
                 risk = abs(entry - sl)
                 sc = bull if direction == BULL else bear
                 ok = (sl < entry if direction == BULL else sl > entry)
-                if not (ok and min_risk <= risk <= max_risk and sc >= cfg.entry_min_score):
+                if not (ok and min_risk <= risk <= max_risk and sc >= cfg.entry_min_score
+                        and _passes_filters(cfg, v, eng, i, direction, f, entry, atrv)):
                     break
                 sign = 1 if direction == BULL else -1
                 t = Trade(direction, entry, sl,
@@ -240,7 +265,10 @@ def run_trades(eng: Engine, views, cfg=None):
                 break
 
         # ── 16.8 trade monitoring ──────────────────────────
-        if cur is not None and cur.state in (ACTIVE, TP1_HIT):
+        # fill_strict: skip the activation bar so the candle used to fill the
+        # entry (bar[1] at activation) can't also register the exit.
+        monitor_ok = not (cfg.fill_strict and cur is not None and i <= cur.activate_bar)
+        if monitor_ok and cur is not None and cur.state in (ACTIVE, TP1_HIT):
             if cur.dir == BULL:
                 hit_sl = (l1 <= cur.entry) if cur.state == TP1_HIT else (l1 <= cur.sl)
                 hit_tp2 = h1 >= cur.tp2

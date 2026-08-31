@@ -263,13 +263,27 @@ Key results:
 - The expiring-setup churn IS the signal-quality gap — the Phase 5
   premium/discount + sweep-to-FVG-distance filters target exactly it.
 
-**Concrete next step:**
-- Fix the same-bar-activation fill bias (require activation strictly after
-  the signal bar) so max-DD / SL counts are trustworthy.
-- Then implement Phase 5 filter #1 (premium/discount equilibrium) and #3
-  (sweep-to-FVG distance), measure each one's delta vs the 30/20 baseline.
+**Wave 5b (2026-08-31) — fill-model fix + first Phase 5 measurements DONE.**
+- `fill_strict` (default): trade monitored only from the bar AFTER
+  activation — removes same-candle fill+exit. Baseline 30/20 now 23 trades,
+  87% win, +34R, exp +1.48R.
+- Filters #1 (premium/discount) and #3 (sweep→FVG distance) implemented
+  (`Config.pd_filter`, `Config.dist_filter_atr`; harness `scripts/phase5.py`).
+- **Result: sample too thin to rank filters.** Trade count is structurally
+  capped ~34 on 2yr BankNifty (≈90% of setups expire before CE retrace,
+  regardless of threshold or setup_max_age). #1 cuts trades ~70% and does
+  NOT raise expectancy on n=7. #3 as written is too strict (post_sweep
+  gate → 3–5 setups/2yr). Max DD pinned at 1.0R everywhere = variance
+  invisible.
+
+**Concrete next step — get more trades (the blocker is data, not engine):**
+1. Kite Connect (paid) → 2+yr Crude/Nifty **futures w/ real volume**
+   (restores ~+10 score pts, lets threshold run near Pine default 55).
+2. Or pool more instruments (NIFTY spot, large-caps) into the bench.
+3. Then re-run `scripts/phase5.py`, rank filters, port winners to Pine.
+- Also: loosen filter #3's distance metric (drop post_sweep req / use
+  bars sweep→FVG) before dismissing it.
 - News (11.5) + pre-positioning stay stubbed.
-- Port the winning filters back to `LSS-Pro.pine`.
 
 **To verify Pine state at start of a new conversation:**
 ```bash

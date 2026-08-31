@@ -1,5 +1,61 @@
 # Findings
 
+## Wave 5b — fill-model fix + first Phase 5 filter measurements (2026-08-31)
+
+### Fix — same-bar fill+exit removed (`fill_strict`, default on)
+
+A trade activated on bar `i` is now monitored only from bar `i+1`, so the
+candle used to fill the entry (`bar[1]` at activation) can't also register
+the exit. Impact on the 30/20 BankNifty baseline: 26→23 trades,
+win 84.6→87.0 %, expectancy +1.14→+1.48 R, max DD unchanged (1.0 R).
+Small — the look-ahead was not inflating results much — but it removes a
+real bias. `--no-fill-strict` keeps the Pine-literal behaviour.
+
+### The trade count is structurally capped (~34 on 2yr BankNifty)
+
+Dropping `conf_threshold` from 30 to 14 takes setups from 273→419 but
+closed trades only 23→37. Raising `setup_max_age` 20→160 *reduces* setups
+(fewer slot turnovers) and leaves trades at ~32. **~90 % of setups expire
+because price never retraces to the FVG CE.** This is not a parameter bug —
+it is the confluence-signal→FVG-CE entry model's real signal frequency:
+**≈11–18 trades/year on BankNifty 5m.**
+
+### Phase 5 filters — implemented, but the sample is too thin to rank them
+
+`scripts/phase5.py <csv> --threshold 30 --entry-min 20`
+
+| variant | trades | win% | totR | exp | DD |
+|---|---|---|---|---|---|
+| baseline (fill-strict) | 23 | 87.0 | +34.0 | +1.48 | 1.0 |
+| Pine-literal fill | 26 | 84.6 | +29.5 | +1.14 | 1.0 |
+| #1 premium/discount | 7 | 71.4 | +8.0 | +1.14 | 1.0 |
+| #3 sweep-dist ≤ 3 ATR | 5 | 100.0 | +10.0 | +2.00 | 0.0 |
+| #1 + #3 | 1 | 100.0 | +2.0 | +2.00 | 0.0 |
+
+- **#1 (longs in discount / shorts in premium)** cuts trades ~70 % and, on
+  this sample, does **not** raise expectancy (+1.48→+1.14). n=7 — no
+  conclusion, but it is not the obvious win the roadmap assumed.
+- **#3 (post-sweep FVG within N ATR of the swept level)** as implemented is
+  too strict — the `post_sweep` requirement alone leaves 3–5 setups in
+  2 years. Needs a looser distance metric (bars sweep→FVG, or drop the
+  post_sweep gate) before it can be measured.
+- Max DD is pinned at exactly 1.0 R in every variant → never two losing
+  trades in a row across the whole sample. With ~3 losses total that is
+  plausible but unmeasurable — **variance is invisible at this trade count.**
+
+### Verdict — the blocker is now data, not engine scope
+
+The full engine is ported and honest. To rank the Phase 5 filters we need
+**10–20× more trades**. Options, in order of value:
+1. Kite Connect (paid) → 2+ yr Crude/Nifty **futures with real volume** —
+   restores the +10 pts of volume-based score and lets `conf_threshold`
+   run near its Pine default.
+2. Add more instruments (NIFTY spot, large-cap stocks) to the bench and
+   pool trades.
+3. Accept ~15 trades/yr and forward-test the filters on the live Pine.
+
+---
+
 ## Wave 5 — full engine port + first baseline (2026-08-29)
 
 Ported the four remaining engines onto the bench:

@@ -37,6 +37,12 @@ class Config:
     # ── Instrument mode ─────────────────────────────────────
     volume_blind: bool = False   # index spot: no real volume — degrade vol gates
 
+    # ── Phase 5 signal-quality filters (0 / False = off) ─────
+    pd_filter: bool = False       # #1 premium/discount: longs in discount only
+    dist_filter_atr: float = 0.0  # #3 sweep→FVG distance ceiling, in ATR (0 = off)
+    fill_strict: bool = True      # exit monitoring starts strictly AFTER the
+                                  # activation bar (removes same-candle fill+exit)
+
     # ── Displacement (Pine 329, 332, 335, 405) ─────────────────
     disp_body_min: float = 0.7     # IN_DISP_BODY_MIN
     disp_range_min: float = 1.2    # IN_DISP_RANGE_MIN  (× ATR)

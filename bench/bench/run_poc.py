@@ -27,6 +27,9 @@ def main(argv=None):
     ap.add_argument("--entry-min", type=int, help="override entry_min_score")
     ap.add_argument("--mintick", type=float, help="instrument tick size")
     ap.add_argument("--volume-blind", action="store_true", help="force volume-blind mode")
+    ap.add_argument("--pd-filter", action="store_true", help="Phase 5 #1 premium/discount gate")
+    ap.add_argument("--dist-filter", type=float, help="Phase 5 #3 sweep->FVG distance ceiling (ATR)")
+    ap.add_argument("--no-fill-strict", action="store_true", help="allow same-bar fill+exit (Pine-literal)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
@@ -47,6 +50,12 @@ def main(argv=None):
         over["entry_min_score"] = args.entry_min
     if args.mintick is not None:
         over["mintick"] = args.mintick
+    if args.pd_filter:
+        over["pd_filter"] = True
+    if args.dist_filter is not None:
+        over["dist_filter_atr"] = args.dist_filter
+    if args.no_fill_strict:
+        over["fill_strict"] = False
     # index spot has no real volume — auto-degrade the volume-based gates
     vol_blind = args.volume_blind or (not args.synthetic and float(df["volume"].fillna(0).abs().sum()) == 0.0)
     if vol_blind:

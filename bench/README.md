@@ -42,6 +42,7 @@ bench/
   run_poc.py     CLI entrypoint
 scripts/
   fetch_kite.py  how to pull historical candles into data/
+  phase5.py      filter experiment harness — baseline vs each Phase 5 filter
 ```
 
 ## Run
@@ -55,6 +56,18 @@ python3 -m venv .venv && .venv/bin/pip install pandas numpy
 
 `--synthetic` uses a random-walk generator (structureless — proves the
 pipeline runs, **not** for real metrics).
+
+### Phase 5 filter flags
+
+```bash
+.venv/bin/python -m bench.run_poc --csv data/banknifty_5m.csv --threshold 30 --entry-min 20 \
+    --pd-filter --dist-filter 3.0            # #1 premium/discount + #3 sweep-distance
+PYTHONPATH=. .venv/bin/python scripts/phase5.py data/banknifty_5m.csv --threshold 30 --entry-min 20
+```
+
+`--no-fill-strict` reverts to Pine-literal same-bar fill+exit. See
+`POC-FINDINGS.md` Wave 5b for what the filters do to the numbers (short
+version: BankNifty spot doesn't generate enough trades to rank them).
 
 ## Why a hand-rolled bar loop (not backtesting.py / vectorbt)
 
