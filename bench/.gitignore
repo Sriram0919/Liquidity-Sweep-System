@@ -1,5 +1,3 @@
 .venv/
 data/raw/
-__pycache__/
-*.pyc
-out/
+data/pool/

@@ -41,8 +41,11 @@ bench/
   trade.py       setup lifecycle + 16.7 retest + exit model + metrics
   run_poc.py     CLI entrypoint
 scripts/
-  fetch_kite.py  how to pull historical candles into data/
+  fetch_kite.py  how to pull historical candles into data/ (Kite MCP / SDK)
+  fetch_yf.py    free 2yr 1h NSE basket via yfinance -> data/pool/ (no auth)
+  stitch.py      build data/<inst>_5m.csv from Kite raw JSON dumps
   phase5.py      filter experiment harness — baseline vs each Phase 5 filter
+                 (--pool globs data/pool/*.csv and concatenates trades)
 ```
 
 ## Run

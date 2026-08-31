@@ -131,7 +131,7 @@ class Engine:
         self.day = self.dt.dt.tz_convert("Asia/Kolkata").dt.normalize().to_numpy()
 
         # OTE rolling precompute (Section 14.9)
-        self.ote_lb = self.cfg.ms_swing_lb * 16
+        self.ote_lb = self.cfg.ms_swing_lb * self.cfg.ote_tf_mult
         self._ote_rh, self._ote_rl, self._ote_ho, self._ote_lo = ote_mod.precompute(
             self.h, self.l, self.ote_lb)
 

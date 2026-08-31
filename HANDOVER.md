@@ -276,13 +276,28 @@ Key results:
   gate → 3–5 setups/2yr). Max DD pinned at 1.0R everywhere = variance
   invisible.
 
-**Concrete next step — get more trades (the blocker is data, not engine):**
-1. Kite Connect (paid) → 2+yr Crude/Nifty **futures w/ real volume**
-   (restores ~+10 score pts, lets threshold run near Pine default 55).
-2. Or pool more instruments (NIFTY spot, large-caps) into the bench.
-3. Then re-run `scripts/phase5.py`, rank filters, port winners to Pine.
-- Also: loosen filter #3's distance metric (drop post_sweep req / use
-  bars sweep→FVG) before dismissing it.
+**Wave 5c (2026-08-31) — free data path + honest fill accounting DONE.**
+- No paid data: `scripts/fetch_yf.py` pulls a 26-name NSE basket (yfinance,
+  60m/2yr, real stock volume) → `data/pool/` (git-ignored, re-fetch free).
+  `scripts/phase5.py --pool` runs the engine per instrument + concatenates.
+- Engine: `ote_tf_mult` config (16=5m / 8=1h); mark-to-market on trade_max_age.
+- **Findings (POC-FINDINGS Wave 5c):**
+  - Real volume does NOT lift the score ceiling — p99 ≈ 37 on every
+    instrument/TF. `conf_threshold=55` stays unreachable. Rescale ~0.55×.
+  - Pooling → only ~55–70 *filled* trades: **~89% of confluence signals
+    never see price retrace to the FVG CE** (fill rate ~10%). That, not
+    the score gate or data length, is the binding constraint.
+  - 98% win / +1.75R expectancy on fills is **not trustworthy** — selection
+    bias + unresolvable intrabar SL-vs-TP (no free 1m data). Max DD pinned
+    1.0R everywhere = variance invisible.
+  - **Phase 5 #1 and #3 show NO edge** across two samples — both just
+    remove fills, expectancy flat-to-down. Roadmap premise not supported.
+
+**Concrete next step — fix the base metric, not the filters:**
+1. Test alternative entry models (market-fill-on-signal vs CE-limit;
+   FVG-edge vs CE) — can fill rate rise without collapsing win rate?
+2. yfinance 5m/60d for ~10 names → spot-check how many "wins" stop out intrabar.
+3. Only then revisit Phase 5 filters.
 - News (11.5) + pre-positioning stay stubbed.
 
 **To verify Pine state at start of a new conversation:**

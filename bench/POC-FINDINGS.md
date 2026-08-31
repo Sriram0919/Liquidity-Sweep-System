@@ -1,5 +1,78 @@
 # Findings
 
+## Wave 5c — free multi-instrument data + honest fill accounting (2026-08-31)
+
+Can't pay for Kite Connect, so: **yfinance** (no auth) serves 60m candles
+for ~2 years — anything sub-hour is capped at 60 days. Individual NSE
+stocks carry **real volume**. `scripts/fetch_yf.py` pulls a 26-name basket
+(24 liquid stocks + Nifty/BankNifty) into `data/pool/`; `scripts/phase5.py
+--pool` runs the full engine per instrument and concatenates the trades.
+
+Engine adds: `ote_tf_mult` config (16 for 5m, 8 for 1h) and mark-to-market
+on `trade_max_age` (a filled trade that goes nowhere now books its real
+small P/L instead of being silently dropped).
+
+### Result 1 — real volume does NOT lift the score ceiling
+
+26-name 1h pool, per-instrument p99 ≈ 37, pooled max 54 — same as
+volume-blind BankNifty. **`conf_threshold=55` is unreachable on every
+instrument and every timeframe tested.** The components just don't stack;
+rescale stays ~0.55×.
+
+### Result 2 — pooling helps, but the fill rate caps the sample at ~10 %
+
+| pool, threshold 30/20 | value |
+|---|---|
+| setups created | 520 |
+| **filled trades** | **55**  (10.6 % of setups) |
+| win % | 98.2 |
+| expectancy | +1.75 R |
+| max DD | 1.0 R |
+
+Threshold 20/14 → 658 setups, 69 fills (10.5 %), same shape. **~89 % of
+confluence signals never see price return to the FVG CE within
+`setup_max_age`.** That is the binding constraint — not the score gate,
+not data length.
+
+### Result 3 — the 98 % win rate is not trustworthy
+
+It reflects, in unknown proportions: (a) a real "FVG holds in a
+high-confluence retrace" edge, (b) heavy **selection bias** — only the
+clean ~10 % of retracements ever fill, (c) **unresolvable intrabar
+ordering** — with no free LTF data we can't tell whether a fill that later
+reached TP first dipped through SL. `fill_strict` (skip the activation
+bar) is optimistic; `--no-fill-strict` (SL-priority on the fill bar) is
+pessimistic; the truth needs 1m data. Max DD pinned at 1.0 R across every
+run = **variance is invisible at this trade count.**
+
+### Result 4 — Phase 5 #1 and #3 do not show an edge
+
+Two independent samples (BankNifty 5m n≈23, 26-name 1h pool n≈55):
+
+| filter | trades | expectancy | verdict |
+|---|---|---|---|
+| baseline | 55 | +1.75 | — |
+| #1 premium/discount | 17 | +1.38 | cuts fills 70 %, expectancy **down** |
+| #3 sweep-dist ≤3 ATR | 11 | +1.59 | cuts fills 80 %, expectancy flat |
+| #1 + #3 | 6 | +1.25 | worse |
+
+The roadmap's premise ("premium/discount = highest expected hit-rate
+gain, do first") is **not supported** by backtest. Both filters mainly
+remove fills.
+
+### Verdict — stop adding filters; fix the base metric
+
+The measurable problems are (1) the ~10 % fill rate and (2) the
+untrustworthy intrabar fill. Neither is solved by more filters or more
+history. Next:
+1. Test alternative entries — market-fill-on-signal vs CE-limit, FVG-edge
+   vs CE — to see if fill rate can rise without collapsing the win rate.
+2. Pull yfinance 5m/60d for ~10 names and spot-check how many "wins"
+   would have stopped out intrabar.
+3. Only then revisit the filters.
+
+---
+
 ## Wave 5b — fill-model fix + first Phase 5 filter measurements (2026-08-31)
 
 ### Fix — same-bar fill+exit removed (`fill_strict`, default on)

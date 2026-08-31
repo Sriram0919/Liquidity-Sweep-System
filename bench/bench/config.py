@@ -25,6 +25,10 @@ class Config:
     htf_period: str = "60min"    # RESOLVED_HTF for a 5m chart (fn_resolve_htf)
     htf_pivot_lb: int = 3        # Pine 6.1: ta.pivothigh(high, 3, 3) on HTF
 
+    # ── OTE lookback multiplier — Pine _ote_tf_mult (14.9) ────
+    # 5m:16  15/30m:12  1H:8  — set with the chart TF of the CSV
+    ote_tf_mult: int = 16
+
     # ── Order Blocks — Section 13B (Pine 315-324) ─────────────
     ob_lookback: int = 5         # IN_OB_LOOKBACK
     ob_body_only: bool = True    # IN_OB_BODY_ONLY

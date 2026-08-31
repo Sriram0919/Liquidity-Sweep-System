@@ -292,7 +292,13 @@ def run_trades(eng: Engine, views, cfg=None):
             elif hit_tp1 and cur.state == ACTIVE:
                 cur.state = TP1_HIT
             elif i - cur.activate_bar > cfg.trade_max_age:
-                cur.outcome, cur.state, cur.exit_bar = "expired", "expired", i
+                # mark-to-market at bar[1] close so a filled trade that goes
+                # nowhere counts as its real (usually small) P/L, not a
+                # silently-dropped setup. R relative to initial risk.
+                mtm = (c1 - cur.entry) / cur.risk if cur.dir == BULL else (cur.entry - c1) / cur.risk
+                if cur.state == TP1_HIT:                 # half already banked at +1R
+                    mtm = cfg.tp1_rr * 0.5 + max(mtm, 0.0) * 0.5
+                cur.outcome, cur.r, cur.state, cur.exit_bar = "timeout", float(mtm), "timeout", i
                 cur = None
 
     eng.scores = scores
@@ -301,14 +307,16 @@ def run_trades(eng: Engine, views, cfg=None):
 
 # ── metrics (Pine Section 17) ────────────────────────────────
 def metrics(trades: list[Trade]) -> dict:
-    closed = [t for t in trades if t.outcome in ("tp2", "be", "sl")]
+    # a "trade" for P/L = anything that actually filled (tp2/be/sl/timeout)
+    closed = [t for t in trades if t.outcome in ("tp2", "be", "sl", "timeout")]
     tp2 = sum(t.outcome == "tp2" for t in closed)
     be = sum(t.outcome == "be" for t in closed)
     sl = sum(t.outcome == "sl" for t in closed)
+    timeout = sum(t.outcome == "timeout" for t in closed)
     total = len(closed)
-    wins = tp2 + be
+    wins = sum(t.r > 0 for t in closed)          # positive-R trades (incl. timeouts)
     r_total = sum(t.r for t in closed)
-    r_wins = sum(t.r for t in closed if t.outcome in ("tp2", "be"))
+    r_wins = sum(t.r for t in closed if t.r > 0)
 
     eq = np.cumsum([t.r for t in closed]) if closed else np.array([0.0])
     peak = np.maximum.accumulate(eq)
@@ -319,6 +327,7 @@ def metrics(trades: list[Trade]) -> dict:
         "tp2_full": tp2,
         "tp1_be": be,
         "sl": sl,
+        "timeout": timeout,
         "win_pct": round(100 * wins / total, 1) if total else 0.0,
         "total_r": round(r_total, 2),
         "expectancy_r": round(r_total / total, 3) if total else 0.0,
