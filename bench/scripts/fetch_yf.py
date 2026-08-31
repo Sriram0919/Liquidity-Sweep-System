@@ -36,8 +36,9 @@ DEFAULT = [
 ]
 
 
-def fetch(ticker: str) -> pathlib.Path | None:
-    d = yf.download(ticker, period="2y", interval="60m",
+def fetch(ticker: str, interval: str = "60m", period: str = "2y",
+         subdir: str = "") -> pathlib.Path | None:
+    d = yf.download(ticker, period=period, interval=interval,
                     progress=False, auto_adjust=False)
     if d is None or len(d) == 0:
         print(f"{ticker:14} EMPTY — skipped")
@@ -52,9 +53,10 @@ def fetch(ticker: str) -> pathlib.Path | None:
         "open": d["open"], "high": d["high"], "low": d["low"],
         "close": d["close"], "volume": d["volume"].fillna(0),
     }).dropna(subset=["open"]).sort_values("date").drop_duplicates("date")
-    OUT.mkdir(parents=True, exist_ok=True)
+    outdir = OUT.parent / subdir if subdir else OUT
+    outdir.mkdir(parents=True, exist_ok=True)
     tag = ticker.replace("^", "").replace(".NS", "").replace("&", "")
-    out = OUT / f"{tag}.csv"
+    out = outdir / f"{tag}.csv"
     df.to_csv(out, index=False)
     v = int(df["volume"].sum())
     print(f"{ticker:14} {len(df):5} bars  {str(df['date'].iloc[0])[:10]} .. "
@@ -63,6 +65,13 @@ def fetch(ticker: str) -> pathlib.Path | None:
 
 
 if __name__ == "__main__":
-    tickers = sys.argv[1:] or DEFAULT
-    n = sum(fetch(t) is not None for t in tickers)
-    print(f"\n{n}/{len(tickers)} written to {OUT}")
+    args = sys.argv[1:]
+    if args and args[0] == "--5m":
+        # 60-day 5m cross-check pool (Yahoo caps sub-hour history at 60d)
+        tickers = args[1:] or DEFAULT
+        n = sum(fetch(t, "5m", "60d", "pool5m") is not None for t in tickers)
+        print(f"\n{n}/{len(tickers)} written to {OUT.parent / 'pool5m'}")
+    else:
+        tickers = args or DEFAULT
+        n = sum(fetch(t) is not None for t in tickers)
+        print(f"\n{n}/{len(tickers)} written to {OUT}")

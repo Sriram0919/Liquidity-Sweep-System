@@ -17,6 +17,7 @@ Outputs per LTF bar (HTFView): the booleans Section 15 scoring consumes.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -49,10 +50,18 @@ class HTFEngine:
         self.cfg = cfg
         d = df[["date", "open", "high", "low", "close", "volume"]].copy()
         d["date"] = pd.to_datetime(d["date"], utc=True)
-        g = (d.resample(cfg.htf_period, on="date", label="left", closed="left")
-               .agg({"open": "first", "high": "max", "low": "min",
-                     "close": "last", "volume": "sum"})
-               .dropna(subset=["open"]))
+        # origin="start" aligns intraday HTF bins to the feed's session open
+        # (NSE 1H bars run 09:15-10:15, not 09:00-10:00 — Pine request.security
+        # uses exchange-aligned bars). Ignored for calendar 'D' (harmless: one
+        # NSE session already falls inside one UTC day).
+        _kw = {} if cfg.htf_period.upper().endswith("D") else {"origin": "start"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            g = (d.resample(cfg.htf_period, on="date", label="left",
+                            closed="left", **_kw)
+                   .agg({"open": "first", "high": "max", "low": "min",
+                         "close": "last", "volume": "sum"})
+                   .dropna(subset=["open"]))
         self.htf = g.reset_index()
         self.h_open = self.htf["open"].to_numpy(float)
         self.h_high = self.htf["high"].to_numpy(float)

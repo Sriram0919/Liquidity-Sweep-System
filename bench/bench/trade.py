@@ -124,7 +124,43 @@ def _passes_filters(cfg, v, eng, i, direction, f, entry, atrv) -> bool:
     return True
 
 
-TERMINAL = {"tp2", "sl", "be", "expired", "invalid", ""}
+TERMINAL = {"tp2", "sl", "be", "expired", "invalid", "timeout", ""}
+
+
+def _make_trade(cfg, v, eng, i, direction, f, sc, source, l1, h1, atrv, buf,
+                min_risk, max_risk):
+    """Build a Trade for the configured entry model, or return None."""
+    sign = 1 if direction == BULL else -1
+    bound = f.bot if direction == BULL else f.top
+
+    if cfg.entry_model == "market":
+        entry = eng.o[i]                       # next-bar open after the signal
+    elif cfg.entry_model == "edge_limit":
+        entry = f.top if direction == BULL else f.bot
+    else:                                      # ce_limit (Pine default)
+        entry = f.ce
+
+    sl = _find_sl(v, atrv, direction, entry, bound, buf)
+    risk = abs(entry - sl)
+    ok_side = (sl < entry) if direction == BULL else (sl > entry)
+    if not (ok_side and min_risk <= risk <= max_risk):
+        return None
+    if not _passes_filters(cfg, v, eng, i, direction, f, entry, atrv):
+        return None
+
+    t = Trade(direction, entry, sl,
+              entry + risk * cfg.tp1_rr * sign,
+              entry + risk * cfg.tp2_rr * sign,
+              risk, i, sc, f.bot, f.top, f, source, PENDING)
+
+    if cfg.entry_model == "market":
+        t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+    else:
+        touched = (np.isfinite(l1) and l1 <= entry) if direction == BULL \
+            else (np.isfinite(h1) and h1 >= entry)
+        if touched:
+            t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+    return t
 
 
 def run_trades(eng: Engine, views, cfg=None):
@@ -175,23 +211,10 @@ def run_trades(eng: Engine, views, cfg=None):
             fvgs = v.bull_fvgs if direction == BULL else v.bear_fvgs
             f = _best_fvg(fvgs, eng.c[i])
             if f:
-                entry = f.ce
-                bound = f.bot if direction == BULL else f.top
-                sl = _find_sl(v, atrv, direction, entry, bound, buf)
-                risk = abs(entry - sl)
-                ok = (sl < entry if direction == BULL else sl > entry)
-                if ok and min_risk <= risk <= max_risk and _passes_filters(
-                        cfg, v, eng, i, direction, f, entry, atrv):
-                    sc = bull if direction == BULL else bear
-                    t = Trade(direction, entry, sl,
-                              entry + risk * cfg.tp1_rr * (1 if direction == BULL else -1),
-                              entry + risk * cfg.tp2_rr * (1 if direction == BULL else -1),
-                              risk, i, sc, f.bot, f.top, f, "signal", PENDING)
-                    # same-bar CE
-                    if direction == BULL and np.isfinite(l1) and l1 <= entry:
-                        t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
-                    elif direction == BEAR and np.isfinite(h1) and h1 >= entry:
-                        t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+                sc = bull if direction == BULL else bear
+                t = _make_trade(cfg, v, eng, i, direction, f, sc, "signal",
+                                l1, h1, atrv, buf, min_risk, max_risk)
+                if t is not None:
                     cur = t
                     trades.append(t)
                     last_setup_bar = i
@@ -241,23 +264,13 @@ def run_trades(eng: Engine, views, cfg=None):
                                and h1 >= f.bot and c1 <= f.top and h2 < f.bot)
                 if not entered:
                     continue
-                entry = f.ce
-                bound = f.bot if direction == BULL else f.top
-                sl = _find_sl(v, atrv, direction, entry, bound, buf)
-                risk = abs(entry - sl)
                 sc = bull if direction == BULL else bear
-                ok = (sl < entry if direction == BULL else sl > entry)
-                if not (ok and min_risk <= risk <= max_risk and sc >= cfg.entry_min_score
-                        and _passes_filters(cfg, v, eng, i, direction, f, entry, atrv)):
+                if sc < cfg.entry_min_score:
                     break
-                sign = 1 if direction == BULL else -1
-                t = Trade(direction, entry, sl,
-                          entry + risk * cfg.tp1_rr * sign,
-                          entry + risk * cfg.tp2_rr * sign,
-                          risk, i, sc, f.bot, f.top, f, "retest", PENDING)
-                ce_reached = (l1 <= entry) if direction == BULL else (h1 >= entry)
-                if ce_reached:
-                    t.state = ACTIVE; t.activate_bar = i; t.entry_score = sc
+                t = _make_trade(cfg, v, eng, i, direction, f, sc, "retest",
+                                l1, h1, atrv, buf, min_risk, max_risk)
+                if t is None:
+                    break
                 cur = t
                 trades.append(t)
                 last_setup_bar = i

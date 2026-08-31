@@ -41,6 +41,12 @@ class Config:
     # ── Instrument mode ─────────────────────────────────────
     volume_blind: bool = False   # index spot: no real volume — degrade vol gates
 
+    # ── Entry model (Wave 6 experiment) ─────────────────────
+    #   "ce_limit"   — Pine default: limit at FVG midpoint, wait for retrace
+    #   "edge_limit" — limit at the near FVG edge (shallower retrace fills)
+    #   "market"     — enter at next-bar open on the signal, no wait
+    entry_model: str = "ce_limit"
+
     # ── Phase 5 signal-quality filters (0 / False = off) ─────
     pd_filter: bool = False       # #1 premium/discount: longs in discount only
     dist_filter_atr: float = 0.0  # #3 sweep→FVG distance ceiling, in ATR (0 = off)

@@ -1,14 +1,14 @@
-"""Phase 5 filter experiment harness.
+"""Entry-model + Phase-5 filter experiment harness.
 
-Two modes:
-  * single CSV:  scripts/phase5.py data/banknifty_5m.csv --threshold 30 --entry-min 20
-  * pooled:      scripts/phase5.py --pool            (globs data/pool/*.csv)
+    scripts/phase5.py --pool                       # 26-name 1h/2yr pool
+    scripts/phase5.py --pool --dir pool5m --tf5m    # 10-name 5m/60d cross-check
+    scripts/phase5.py data/banknifty_5m.csv        # single CSV
 
 Pooled mode runs the full engine per instrument and concatenates the trades
-so filter deltas are measured on a few-hundred-trade sample instead of ~30.
-`data/pool/*.csv` = 2yr 1h NSE names from scripts/fetch_yf.py (real volume).
+so entry models / filters are measured on a few-hundred-trade sample.
 
-Prints one comparison table: baseline vs each signal-quality filter.
+Columns: trades = filled (tp2/be/sl/timeout); w/l/to = tp2+be / sl / timeout;
+win% = share of positive-R trades; exp = R per filled trade.
 """
 from __future__ import annotations
 
@@ -16,21 +16,12 @@ import argparse
 import glob
 import pathlib
 
-import numpy as np
-
 from bench.config import Config
 from bench.data import load_candles
 from bench.engine import Engine
 from bench.trade import run_trades, metrics
 
-POOL = pathlib.Path(__file__).resolve().parent.parent / "data" / "pool"
-
-
-def _agg(all_trades):
-    m = metrics(all_trades)
-    closed = [t for t in all_trades if t.outcome in ("tp2", "be", "sl")]
-    # per-instrument spread of expectancy, to show it isn't one lucky symbol
-    return m, closed
+DATA = pathlib.Path(__file__).resolve().parent.parent / "data"
 
 
 def run_variant(csvs, base_over, extra, tf1h):
@@ -47,25 +38,27 @@ def run_variant(csvs, base_over, extra, tf1h):
             o.setdefault("mintick", 0.05)
         cfg = Config(**{**Config().__dict__, **o})
         eng = Engine(df, cfg)
-        views = eng.run()
-        all_trades.extend(run_trades(eng, views, cfg))
+        all_trades.extend(run_trades(eng, eng.run(), cfg))
     return metrics(all_trades)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="?")
-    ap.add_argument("--pool", action="store_true", help="glob data/pool/*.csv")
+    ap.add_argument("--pool", action="store_true")
+    ap.add_argument("--dir", default="pool", help="pool subdir under data/ (default: pool)")
+    ap.add_argument("--tf5m", action="store_true", help="pool is 5m data (keep 5m OTE/HTF tuning)")
     ap.add_argument("--threshold", type=int, default=30)
     ap.add_argument("--entry-min", type=int, default=20)
     args = ap.parse_args(argv)
 
     if args.pool:
-        csvs = sorted(glob.glob(str(POOL / "*.csv")))
+        csvs = sorted(glob.glob(str(DATA / args.dir / "*.csv")))
         if not csvs:
-            ap.error(f"no CSVs in {POOL} — run scripts/fetch_yf.py first")
-        label = f"POOL ({len(csvs)} instruments, 1h/2yr)"
-        tf1h = True
+            ap.error(f"no CSVs in {DATA / args.dir} — run scripts/fetch_yf.py first")
+        tf = "5m" if args.tf5m else "1h"
+        label = f"POOL {args.dir} ({len(csvs)} instruments, {tf})"
+        tf1h = not args.tf5m
     else:
         if not args.csv:
             ap.error("pass a CSV path or --pool")
@@ -76,24 +69,27 @@ def main(argv=None):
     base = {"conf_threshold": args.threshold, "entry_min_score": args.entry_min}
 
     variants = [
-        ("baseline (fill-strict)",   {}),
-        ("Pine-literal fill",        {"fill_strict": False}),
-        ("#1 premium/discount",      {"pd_filter": True}),
-        ("#3 dist<=1.5 ATR",         {"dist_filter_atr": 1.5}),
-        ("#3 dist<=3 ATR",           {"dist_filter_atr": 3.0}),
-        ("#1 + #3(3 ATR)",           {"pd_filter": True, "dist_filter_atr": 3.0}),
+        ("ce_limit (Pine)",          {}),
+        ("ce_limit Pine-literal",     {"fill_strict": False}),
+        ("edge_limit",               {"entry_model": "edge_limit"}),
+        ("market",                   {"entry_model": "market"}),
+        ("market + #1 P/D",          {"entry_model": "market", "pd_filter": True}),
+        ("market + #3 dist3ATR",     {"entry_model": "market", "dist_filter_atr": 3.0}),
+        ("edge_limit + #1 P/D",      {"entry_model": "edge_limit", "pd_filter": True}),
+        ("edge_limit + #3 dist3ATR", {"entry_model": "edge_limit", "dist_filter_atr": 3.0}),
     ]
 
-    hdr = (f"{'variant':<24} {'trades':>6} {'win%':>6} {'totR':>8} {'exp':>6} "
-           f"{'DD':>6} {'setups':>7} {'exp/inv':>7}")
+    hdr = (f"{'variant':<24} {'trades':>6} {'w/l/to':>10} {'win%':>6} {'totR':>8} "
+           f"{'exp':>6} {'DD':>6} {'setups':>7}")
     print(f"\n{label}   threshold {args.threshold} / entry-min {args.entry_min}")
     print(hdr)
     print("-" * len(hdr))
     for name, extra in variants:
         m = run_variant(csvs, base, extra, tf1h)
-        print(f"{name:<24} {m['trades']:>6} {m['win_pct']:>6} {m['total_r']:>+8.1f} "
-              f"{m['expectancy_r']:>+6.2f} {m['max_dd_r']:>6.1f} {m['setups_created']:>7} "
-              f"{m['expired_or_invalid']:>7}")
+        wl = f"{m['tp2_full'] + m['tp1_be']}/{m['sl']}/{m['timeout']}"
+        print(f"{name:<24} {m['trades']:>6} {wl:>10} {m['win_pct']:>6} "
+              f"{m['total_r']:>+8.1f} {m['expectancy_r']:>+6.2f} {m['max_dd_r']:>6.1f} "
+              f"{m['setups_created']:>7}")
     print()
 
 

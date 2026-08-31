@@ -1,5 +1,74 @@
 # Findings
 
+## Wave 6 — self-review + entry-model comparison (2026-08-31)
+
+Autonomous pass: audited the port against the Pine source, fixed what was
+wrong, then attacked the real problem (the ~10 % fill rate) by testing
+alternative entry models on two independent pools.
+
+### Bugs fixed in the port
+
+| bug | effect | fix |
+|---|---|---|
+| `_session_flags` hard-coded NSE hours (03:45–10:00 UTC) | on MCX Crude ~70 % of bars were flagged out-of-session, killing the retest path + session/KZ score | session bounds now derived from the feed's own daily time range (0.5/99.5 pctile) |
+| HTF resample binned on wall-clock hours | NSE 1H bars are 09:15–10:15, not 09:00–10:00 → HTF FVG/OB/bias computed on misaligned bars | `origin="start"` for intraday HTF periods |
+| `trade_max_age` silently dropped stalled trades | filled-but-going-nowhere trades vanished from P/L instead of booking a small result | mark-to-market at timeout (Wave 5c, verified here) |
+
+Everything else audited (FVG 5-state, sweep grading, MS BOS/CHoCH, OTE
+fib math, inducement, PDH/PDL, recent-event windows) matched Pine.
+
+### Entry model is the lever — `market` and `edge_limit` both work
+
+`scripts/phase5.py --pool` (26-name 1h/2yr) and `--pool --dir pool5m --tf5m`
+(10-name 5m/60d). Threshold 30 / entry-min 20:
+
+| model | 1h: trades / win% / exp / DD | 5m: trades / win% / exp / DD |
+|---|---|---|
+| **ce_limit** (Pine default) | 55 / 98 % / +1.75 / 1.0 | 36 / 94 % / +1.75 / 1.0 |
+| **edge_limit** (near FVG edge) | 196 / 95 % / +1.38 / 1.0 | 136 / 90 % / +1.28 / 1.5 |
+| **market** (open after signal) | 180 / 88 % / +1.24 / 3.0 | 115 / 85 % / +1.05 / 2.4 |
+
+- **ce_limit's 98 % win rate is an artifact** — it only ever fills the ~10 %
+  of setups where price retraced perfectly. **The live Pine indicator uses
+  this model.**
+- **`market` is the honest model** — ~all setups fill, DD is realistic
+  (2.4–3 R), and the result is **still clearly positive: ~85–88 % win,
+  +1.0–1.25 R expectancy** across both timeframes and 115–180 trades.
+- Robust to threshold: market-entry expectancy holds +1.0–1.24 R from
+  threshold 16 to 30 on both pools. It *drops* to +0.94 R at threshold 40 —
+  **higher confluence score did not mean better trades.**
+- **`edge_limit`** is the middle ground: more trades than ce_limit, higher
+  win rate than market, DD still low — but retains mild selection bias
+  (~40 % of setups still expire).
+
+### Phase 5 filters #1 and #3 — still no edge (now on 4 samples)
+
+Tested against both entry models on both pools. Premium/discount (#1) and
+sweep-distance (#3) each cut trade count 50–90 % and move expectancy
+inconsistently (−0.3 R here, +0.25 R there, n often < 30). **No repeatable
+improvement.** The roadmap's "premium/discount = biggest gain" premise is
+not supported by any sample we've run.
+
+### Remaining caveat
+
+The 85–88 % win rate on `market` still carries intrabar optimism — with no
+free 1-minute data we can't fully resolve "did SL or TP2 hit first" on a
+wide bar. The 5m vs 1h agreement (85 % vs 88 %, +1.05 vs +1.24 R) bounds
+the error at a few points, not tens. A tighter check needs 1m data.
+
+### Recommendation
+
+1. **Change the Pine indicator's entry model** — or add `market` /
+   `edge_limit` as an input alongside the CE limit. The retrace-and-fill
+   model misses ~90 % of the strategy's own signals.
+2. **Drop Phase 5 filters #1 and #3** from the roadmap unless a much larger
+   sample resurrects them. Spend the effort on #2 (regime) / #4 (entry
+   candle) instead, or on tightening the exit model.
+3. If porting `market` entry to Pine: it removes the pending-setup state
+   machine entirely — simpler code.
+
+---
+
 ## Wave 5c — free multi-instrument data + honest fill accounting (2026-08-31)
 
 Can't pay for Kite Connect, so: **yfinance** (no auth) serves 60m candles

@@ -42,10 +42,14 @@ bench/
   run_poc.py     CLI entrypoint
 scripts/
   fetch_kite.py  how to pull historical candles into data/ (Kite MCP / SDK)
-  fetch_yf.py    free 2yr 1h NSE basket via yfinance -> data/pool/ (no auth)
+  fetch_yf.py    free NSE baskets via yfinance (no auth):
+                   (default)  26 names, 1h, 2yr   -> data/pool/
+                   --5m       10 names, 5m, 60d   -> data/pool5m/
   stitch.py      build data/<inst>_5m.csv from Kite raw JSON dumps
-  phase5.py      filter experiment harness — baseline vs each Phase 5 filter
-                 (--pool globs data/pool/*.csv and concatenates trades)
+  phase5.py      entry-model + Phase-5 filter harness
+                   --pool                 26-name 1h/2yr pool
+                   --pool --dir pool5m --tf5m   5m/60d cross-check
+                   <csv>                  single instrument
 ```
 
 ## Run

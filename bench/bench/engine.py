@@ -130,6 +130,13 @@ class Engine:
         self.rsi_bull_div, self.rsi_bear_div = ind.rsi_divergence(self.df, self.rsi, 5)
         self.day = self.dt.dt.tz_convert("Asia/Kolkata").dt.normalize().to_numpy()
 
+        # Data-driven session bounds (UTC minute-of-day). Pine's Section 4
+        # hard-codes NSE hours; deriving them from the feed keeps active_session
+        # / kill-zone correct for MCX Crude, yfinance, etc. too.
+        _mod = (self.dt.dt.hour * 60 + self.dt.dt.minute).to_numpy()
+        self._sess_lo = int(np.percentile(_mod, 0.5))
+        self._sess_hi = int(np.percentile(_mod, 99.5))
+
         # OTE rolling precompute (Section 14.9)
         self.ote_lb = self.cfg.ms_swing_lb * self.cfg.ote_tf_mult
         self._ote_rh, self._ote_rl, self._ote_ho, self._ote_lo = ote_mod.precompute(
@@ -433,10 +440,10 @@ class Engine:
         self.bear_fvg = [f for f in self.bear_fvg if keep(f)]
 
     def _session_flags(self, ts):
-        """India cash session in UTC: 03:45-10:00 ; India KZ 03:45-04:30."""
+        """Active session + opening kill-zone, from the feed's own daily range."""
         m = ts.hour * 60 + ts.minute
-        active = 3 * 60 + 45 <= m < 10 * 60
-        kz = 3 * 60 + 45 <= m < 4 * 60 + 30
+        active = self._sess_lo <= m <= self._sess_hi
+        kz = self._sess_lo <= m < self._sess_lo + 45
         return active, kz
 
     # ── main ──────────────────────────────────────────────────

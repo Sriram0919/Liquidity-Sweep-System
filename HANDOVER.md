@@ -293,11 +293,33 @@ Key results:
   - **Phase 5 #1 and #3 show NO edge** across two samples — both just
     remove fills, expectancy flat-to-down. Roadmap premise not supported.
 
-**Concrete next step — fix the base metric, not the filters:**
-1. Test alternative entry models (market-fill-on-signal vs CE-limit;
-   FVG-edge vs CE) — can fill rate rise without collapsing win rate?
-2. yfinance 5m/60d for ~10 names → spot-check how many "wins" stop out intrabar.
-3. Only then revisit Phase 5 filters.
+**Wave 6 (2026-08-31, autonomous) — self-review + entry-model comparison DONE.**
+- Fixed 3 port bugs: `_session_flags` hard-coded NSE hours (broke Crude
+  retest path — now data-driven); HTF resample binned on wall-clock hours
+  not session-aligned (`origin="start"`); trade timeout now marks-to-market.
+  Rest of the port audited clean against Pine.
+- Added `Config.entry_model` = `ce_limit` (Pine default) / `edge_limit` /
+  `market`. Tested on 26-name 1h/2yr pool + 10-name 5m/60d pool.
+- **RESULT — entry model is the lever:**
+  - `ce_limit` (what live Pine uses): only ~10% of setups fill → its 98%
+    win rate is an artifact of selection bias.
+  - **`market` (enter at open on the signal): ~all fill, DD realistic
+    (2.4–3R), still positive — 85–88% win, +1.0–1.25R expectancy across
+    both timeframes, 115–180 trades. Robust threshold 16–30.**
+  - `edge_limit`: middle ground (more trades than ce_limit, ~90–95% win).
+  - Higher confluence score ≠ better trades (expectancy DROPS at threshold 40).
+- **Phase 5 filters #1 (premium/discount) + #3 (distance): no edge on any
+  of 4 samples.** Recommend dropping them from the roadmap.
+
+**Concrete next step:**
+1. **Port `market` (or `edge_limit`) entry to `LSS-Pro.pine`** — add as an
+   input alongside the CE limit. This is the highest-value change: the
+   retrace-fill model misses ~90% of the indicator's own signals. `market`
+   also removes the pending-setup state machine (simpler Pine).
+2. Get 1m data (still free-source only — investigate) to bound the residual
+   intrabar optimism in the 85% win rate.
+3. Roadmap filters: skip #1/#3, try #2 (regime) / #4 (entry candle) or
+   tighten the exit model instead.
 - News (11.5) + pre-positioning stay stubbed.
 
 **To verify Pine state at start of a new conversation:**
