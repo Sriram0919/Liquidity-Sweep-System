@@ -52,10 +52,11 @@ Tested against both entry models on both pools (threshold 22/15):
 | #3 sweep-distance ≤3 ATR | +1.20→+1.10 | +1.04→+1.24 | noise, huge trade cut |
 | **#4 signal-candle body ≥ 50 %** | **+1.20→+1.29, DD 2.0→1.0** | +1.04→+0.97 | **3 of 4 samples better; DD consistently halved** |
 
-`#4` is the only filter with a repeatable signal — a modest expectancy
-bump and a **consistent drawdown reduction** (2.0→1.0 R) — and it's cheap
-(one candle check). The 5m/market sample is the lone dissenter (added
-timeouts). Worth carrying forward; the other three are not.
+**Bottom line: no filter shows a robust edge.** #4 is the least bad — it
+helps at some thresholds (22/15: +exp, DD 2.0→1.0) and is neutral at
+others (30/20: slightly −exp). #1/#2/#3 are dead weight — big trade cuts,
+no consistent payoff. If any filter is ported it should be #4, and only
+after re-checking on the target instrument.
 
 ### The market-entry edge is broad, not one lucky instrument
 

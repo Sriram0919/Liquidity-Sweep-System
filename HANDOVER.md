@@ -308,9 +308,9 @@ Key results:
     both timeframes, 115–180 trades. Robust threshold 16–30.**
   - `edge_limit`: middle ground (more trades than ce_limit, ~90–95% win).
   - Higher confluence score ≠ better trades (expectancy DROPS at threshold 40).
-- **Phase 5 filters: #1/#2/#3 no edge on any sample. #4 (signal-candle
-  body ≥ 50%) is the only keeper** — small +expectancy, DD consistently
-  halved (2.0→1.0R), 3 of 4 samples. `Config.candle_filter`.
+- **Phase 5 filters: none show a robust edge.** #1/#2/#3 = dead weight.
+  #4 (signal-candle body ≥ 50%, `Config.candle_filter`) helps at some
+  thresholds, neutral at others — the only one worth re-checking later.
 
 **Concrete next step:**
 1. **Port `market` (or `edge_limit`) entry to `LSS-Pro.pine`** — add as an
@@ -319,9 +319,9 @@ Key results:
    also removes the pending-setup state machine (simpler Pine).
 2. Get 1m data (still free-source only — investigate) to bound the residual
    intrabar optimism in the 85% win rate.
-3. Roadmap filters: skip #1/#2/#3; port #4 (`candle_filter=0.5`) with the
-   entry change. Then try exit-model tweaks (partial at 1R already in;
-   trailing stop, time-stop) instead of more entry filters.
+3. Roadmap filters: skip #1/#2/#3. Re-check #4 on the target instrument
+   before bothering. Then try exit-model tweaks (trailing stop, time-stop)
+   instead of more entry filters.
 - News (11.5) + pre-positioning stay stubbed.
 
 **To verify Pine state at start of a new conversation:**
