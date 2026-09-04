@@ -1,64 +1,50 @@
-# LSS News Monitor — Indian Equity Coverage Update
+# LSS News Monitor — Change Log
 
-## What Was Fixed
-
-The news monitor was missing Indian equity stock news (e.g. Tejas Networks ₹1,537 cr order win on 27 Aug 2026) because `INDIA_KEYWORDS` only had macro/index-level keywords and no corporate event terms.
-
----
-
-## Changes Made
-
-### 1. `config.py` — Added Corporate Event Keywords
-
-Added to `INDIA_KEYWORDS`:
-
-```python
-# ── Corporate Events ─────────────────────────────────────────
-"order win", "wins order", "order received", "secures order",
-"order book", "contract win", "contract awarded",
-"quarterly results", "Q1 results", "Q2 results", "Q3 results", "Q4 results",
-"net profit", "PAT", "revenue growth", "EBITDA",
-"upper circuit", "lower circuit",
-"acquisition", "merger", "takeover", "stake sale",
-"demerger", "rights issue", "buyback",
-"block deal", "bulk deal",
-"rating upgrade", "rating downgrade",
-```
-
-### 2. `news_monitor.py` — Added RSS Feeds
-
-Added to `INDIA_RSS_FEEDS`:
-
-```python
-# Business Standard Markets
-"https://www.business-standard.com/rss/markets-106.rss",
-# Google News — India stocks corporate news
-"https://news.google.com/rss/search?q=India+stock+order+win+results+circuit&hl=en-IN&gl=IN&ceid=IN:en",
-```
+Companion repo: `Sriram0919/lss-news-monitor` (private, GitHub Actions + RSS + Telegram).
+This file tracks changes made to it from the LSS project.
 
 ---
 
-## How It Works Now
+## 2026-09-04 — India/commodity coverage rebuild (PR #1, branch `fix/india-coverage`)
 
-- Monitor runs every **10 minutes** via GitHub Actions (free, always on)
-- Scans 10 RSS feeds for India including ET Markets, Moneycontrol, LiveMint, Business Standard
-- Keywords are **event-type based** — catches any Nifty 500 stock, not just specific companies
-- Alerts sent to Telegram within 10 minutes of a headline going live
+**Problem:** barely any Indian stock news was coming through. Review found the
+causes were structural, not missing keywords.
 
-## Coverage
+| # | Root cause | Fix |
+|---|---|---|
+| 1 | `RSS_LOOKBACK_MINUTES = 30` but GitHub throttles the `*/10` cron to ~3–5 h gaps on a private repo → ~90% of the timeline never scanned | **State-driven window** — `state.json` (last-run watermark + seen ids), committed back each run; scan since last run − overlap, capped at `MAX_LOOKBACK_MIN` |
+| 2 | Google News *search* feeds are relevance-sorted (newest items 700–900 h deep) and were the only feeds with single-stock news → 30-min filter killed all of it | Scope GN feeds with `when:`; add chronological publisher feeds (ET Markets/Stocks/Economy, BS Markets/Companies, Mint Markets/Companies) |
+| 3 | Dead feeds: Reuters RSS (retired), Moneycontrol (frozen ~2 yr) | Removed; added Oilprice.com |
+| 4 | Substring keyword matching — `PAT`→"compatible", `SPR`/`EIA` false hits | Whole-word regex matching |
+| 5 | `seen_urls` in-memory only (empty every Actions run) | Persisted in `state.json` (`SEEN_CACHE_SIZE` ids) |
+| 6 | A multi-hour gap would now dump 100+ matches to Telegram at once | **Two keyword tiers** — `*_KEYWORDS_HIGH` (events/surprises) → individual alerts, capped `MAX_ALERTS_PER_RUN=8`; `*_KEYWORDS_CONTEXT` (index chatter) + overflow → one digest message |
+| 7 | Investing.com dates unparseable (→ every item treated "recent"); Atom `<link>` href ignored | Added date format; read `<link href>`; GN source = publisher name |
 
-| Event Type | Example |
-|---|---|
-| Order wins | "Tejas Networks secures ₹1,537 cr order from TCS" |
-| Results | "Infosys Q2 results — net profit up 12%" |
-| Circuit | "Suzlon hits upper circuit after order win" |
-| M&A | "Adani acquires stake in XYZ Ltd" |
-| Block deals | "Promoter sells 5% via block deal" |
-| Rating changes | "ICRA upgrades rating of ABC Corp" |
+Workflow: added `permissions: contents: write`, `concurrency` guard, and a
+persist-state commit step.
+
+**Latency decision (stays on GitHub Actions):** the state window makes throttle
+gaps non-fatal, so no always-on host — keeps it zero-cost / zero-maintenance,
+which is what a discretionary pre-positioning aid needs. Instead: cron moved
+`*/10` → `4,19,34,49 * * * *` (every 15 min, off the `:00`/`:30` marks GitHub
+throttles hardest); alerts now show headline age (`· 2h ago`) so a stale hit is
+obvious; scheduled macro events (EIA/CPI/RBI) ride `calendar_monitor`, which
+polls every run regardless.
+
+**Verified locally** against live feeds: 20-min window → 8 hits; immediate
+re-run → 0 (dedup); simulated 6 h gap → 169 raw matches collapsed to 8 alerts
++ 1 digest; `py_compile` clean. Not verified: live Telegram send, the
+workflow's git-push-back (first runs on merge).
+
+**Open:** GitHub Actions can't do a true 10-min schedule on a private repo —
+move `monitor.py` to an always-on host if sub-hour latency is needed.
 
 ---
 
-## Commits
+## 2026-08-28 — Indian equity keywords + feeds (commits c5b6f37, b30fc5f)
 
-- `c5b6f37` — feat: add corporate event keywords to INDIA_KEYWORDS
-- `b30fc5f` — feat: add Business Standard and Google News corporate RSS feeds
+`INDIA_KEYWORDS` had only macro/index terms — no corporate-event wording, so
+single-stock catalysts (e.g. Tejas Networks order win, 27 Aug) were missed.
+Added order-win / results / circuit / M&A / block-deal / rating keywords, plus
+Business Standard Markets and a Google News corporate-news feed. (Superseded
+by the 2026-09-04 rebuild — keyword list restructured into tiers.)
