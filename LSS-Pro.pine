@@ -418,6 +418,13 @@ bool  IN_NEWS_MANUAL    = input.bool(false, "Manual News Mode (override)", group
 bool  IN_NEWS_PREPOS    = input.bool(true, "Enable Pre-Positioning Logic", group = GRP_NEWS,
      tooltip = "During pre-news window, tracks structure bias & sweeps to identify likely post-news direction. Generates a premium entry alert when the post-news sweep confirms.")
 
+// Published 2026 schedules, verified 2026-09-09. Refresh annually.
+bool IN_NEWS_AUTO = input.bool(true, "Use verified 2026 commodity schedule", group = GRP_NEWS,
+     tooltip = "EIA/API times use America/New_York with published 2026 holiday exceptions. Outside 2026 use a custom release or manual mode.")
+bool IN_NEWS_CUSTOM = input.bool(false, "Use custom release on this chart", group = GRP_NEWS,
+     tooltip = "Replaces automatic events on this chart while enabled. Set the exact release below; turn off to resume the published schedule.")
+int IN_NEWS_CUSTOM_TIME = input.time(0, "Custom release time", group = GRP_NEWS)
+
 // ── Alert Settings ────────────────────────────────────────────
 string GRP_ALERT = "═══ Alert Settings ═══"
 int   IN_ALERT_MIN_SCORE = input.int(55, "Alert Min Score (score-gated alerts)", minval = 10, maxval = 100,
@@ -820,15 +827,14 @@ if barstate.islast
 // SECTION 11.5 — NEWS CALENDAR ENGINE  (v2.7.0)
 // ============================================================
 // Architecture:
-//   Tracks recurring high-impact crude oil events by UTC time.
+//   Tracks published 2026 commodity events in Eastern time, including holiday shifts.
 //   Three phases per event:
 //     PRE  : IN_NEWS_PRE_MINS before release  → block new setups
 //     LIVE : 0–IN_NEWS_POST_MINS after release → still blocked, watch sweep
 //     POST : after LIVE window ends            → resume, bonus sweep scoring
 //
-//   Hardcoded weekly events (UTC):
-//     EIA Crude Inventory  — Wednesday 14:30 UTC (8:00 PM IST)
-//     API Crude Inventory  — Tuesday   20:30 UTC (2:00 AM IST next day)
+//   EIA Crude: normally Wed 10:30 ET; API: normally Tue 16:30 ET.
+//   EIA Natural Gas: normally Thu 10:30 ET. Published exceptions below.
 //
 //   Manual override: IN_NEWS_MANUAL blocks regardless of time.
 //
@@ -839,11 +845,51 @@ if barstate.islast
 //   NEWS_EVENT   — name of the upcoming/current event
 // ============================================================
 
-// ── Time helpers (Pine v6 compatible) ────────────────────────
-// Use timestamp() and time session strings to detect windows
-// Pine v6: hour(), minute(), dayofweek() take no timezone arg —
-// they return values in the chart's exchange timezone.
-// We use time() with session strings in UTC instead — clean approach.
+// Use IANA Eastern time: UTC offsets change with daylight-saving.
+// Source: eia.gov/petroleum/supply/weekly/schedule.php,
+// ir.eia.gov/ngs/schedule.html, api.org/energy-insights/statistics/wsb.
+string NEWS_TZ = "America/New_York"
+
+// Current/next week's published release timestamp. Day offset is Monday=0.
+fn_news_release(int day_offset, int release_hour, int release_minute, int kind, int week_shift) =>
+    int y = year(time, "America/New_York")
+    int m = month(time, "America/New_York")
+    int d = dayofmonth(time, "America/New_York")
+    int mon_offset = (dayofweek(time, "America/New_York") + 5) % 7
+    int nominal = timestamp("America/New_York", y, m, d - mon_offset + day_offset + 7 * week_shift, release_hour, release_minute)
+    int result = nominal
+    if kind == 0
+        result := switch nominal
+            timestamp("America/New_York", 2026, 1, 21, 10, 30) => timestamp("America/New_York", 2026, 1, 22, 12, 0)
+            timestamp("America/New_York", 2026, 2, 18, 10, 30) => timestamp("America/New_York", 2026, 2, 19, 12, 0)
+            timestamp("America/New_York", 2026, 5, 27, 10, 30) => timestamp("America/New_York", 2026, 5, 28, 12, 0)
+            timestamp("America/New_York", 2026, 9, 9, 10, 30) => timestamp("America/New_York", 2026, 9, 10, 12, 0)
+            timestamp("America/New_York", 2026, 10, 14, 10, 30) => timestamp("America/New_York", 2026, 10, 15, 12, 0)
+            timestamp("America/New_York", 2026, 11, 11, 10, 30) => timestamp("America/New_York", 2026, 11, 12, 12, 0)
+            => nominal
+    if kind == 1
+        result := switch nominal
+            timestamp("America/New_York", 2026, 1, 20, 16, 30) => timestamp("America/New_York", 2026, 1, 21, 16, 30)
+            timestamp("America/New_York", 2026, 2, 17, 16, 30) => timestamp("America/New_York", 2026, 2, 18, 16, 30)
+            timestamp("America/New_York", 2026, 5, 26, 16, 30) => timestamp("America/New_York", 2026, 5, 27, 16, 30)
+            timestamp("America/New_York", 2026, 9, 8, 16, 30) => timestamp("America/New_York", 2026, 9, 9, 16, 30)
+            timestamp("America/New_York", 2026, 10, 13, 16, 30) => timestamp("America/New_York", 2026, 10, 14, 16, 30)
+            => nominal
+    if kind == 2
+        result := switch nominal
+            timestamp("America/New_York", 2026, 1, 1, 10, 30) => timestamp("America/New_York", 2025, 12, 31, 12, 0)
+            timestamp("America/New_York", 2026, 11, 12, 10, 30) => timestamp("America/New_York", 2026, 11, 13, 10, 30)
+            timestamp("America/New_York", 2026, 11, 26, 10, 30) => timestamp("America/New_York", 2026, 11, 25, 12, 0)
+            => nominal
+    // No unverified holiday extrapolation into another calendar year.
+    year(nominal, "America/New_York") == 2026 ? result : int(na)
+
+fn_news_phase(int release, int from_minutes, int to_minutes) =>
+    not na(release) and time >= release + from_minutes * 60000 and time < release + to_minutes * 60000
+
+fn_news_gate(int release) =>
+    // Block every chart bar overlapping the pre/live interval.
+    not na(release) and time < release + 5 * 60000 and nz(time_close, time + 60000) > release - 15 * 60000
 
 // ── Instrument detection (v2.7.1) ────────────────────────────
 // Auto-detect instrument so crude oil events do NOT fire on
@@ -863,38 +909,53 @@ bool IS_NATGAS = str.contains(str.upper(syminfo.ticker), "NATGAS") or
                   str.upper(syminfo.ticker) == "NG")
 bool IS_EQUITY = syminfo.type == "stock"
 
-// EIA Crude Inventory — Wednesday 14:30 UTC
-bool _eia_pre  = IS_CRUDE and not na(time("1", "1415-1430:4", "UTC"))   // Wed 14:15–14:30 UTC
-bool _eia_live = IS_CRUDE and not na(time("1", "1430-1435:4", "UTC"))   // Wed 14:30–14:35 UTC
-bool _eia_post = IS_CRUDE and not na(time("1", "1435-1505:4", "UTC"))   // Wed 14:35–15:05 UTC
+bool _news_auto = IN_NEWS_FILTER and IN_NEWS_AUTO and not IN_NEWS_CUSTOM and not IN_NEWS_MANUAL
+int _eia_release = _news_auto and IS_CRUDE ? fn_news_release(2, 10, 30, 0, 0) : int(na)
+int _api_release = _news_auto and IS_CRUDE ? fn_news_release(1, 16, 30, 1, 0) : int(na)
+int _ng_release = _news_auto and IS_NATGAS ? fn_news_release(3, 10, 30, 2, 0) : int(na)
+int _custom_release = IN_NEWS_FILTER and IN_NEWS_CUSTOM and not IN_NEWS_MANUAL and IN_NEWS_CUSTOM_TIME > 0 ? IN_NEWS_CUSTOM_TIME : int(na)
+bool _eia_pre = fn_news_phase(_eia_release, -15, 0)
+bool _eia_live = fn_news_phase(_eia_release, 0, 5)
+bool _eia_post = fn_news_phase(_eia_release, 5, 35)
+bool _api_pre = fn_news_phase(_api_release, -15, 0)
+bool _api_live = fn_news_phase(_api_release, 0, 5)
+bool _api_post = fn_news_phase(_api_release, 5, 35)
+bool _ng_pre = fn_news_phase(_ng_release, -15, 0)
+bool _ng_live = fn_news_phase(_ng_release, 0, 5)
+bool _ng_post = fn_news_phase(_ng_release, 5, 35)
+bool _custom_pre = fn_news_phase(_custom_release, -15, 0)
+bool _custom_live = fn_news_phase(_custom_release, 0, 5)
+bool _custom_post = fn_news_phase(_custom_release, 5, 35)
 
-// API Crude Inventory — Tuesday 20:30 UTC
-bool _api_pre  = IS_CRUDE and not na(time("1", "2015-2030:3", "UTC"))   // Tue 20:15–20:30 UTC
-bool _api_live = IS_CRUDE and not na(time("1", "2030-2035:3", "UTC"))   // Tue 20:30–20:35 UTC
-bool _api_post = IS_CRUDE and not na(time("1", "2035-2105:3", "UTC"))   // Tue 20:35–21:05 UTC
-
-// EIA Natural Gas Inventory — Thursday 14:30 UTC
-bool _ng_pre   = IS_NATGAS and not na(time("1", "1415-1430:5", "UTC"))  // Thu 14:15–14:30 UTC
-bool _ng_live  = IS_NATGAS and not na(time("1", "1430-1435:5", "UTC"))  // Thu 14:30–14:35 UTC
-bool _ng_post  = IS_NATGAS and not na(time("1", "1435-1505:5", "UTC"))  // Thu 14:35–15:05 UTC
-
-// Equities and all other instruments (Gold, indices, FX):
-// Auto events disabled — only IN_NEWS_MANUAL applies.
-
-// ── Derive phase ─────────────────────────────────────────────
-bool NEWS_BLOCKED = IN_NEWS_FILTER and (IN_NEWS_MANUAL or
-     _eia_pre or _eia_live or _api_pre or _api_live or _ng_pre or _ng_live)
-bool NEWS_POST    = IN_NEWS_FILTER and (_eia_post or _api_post or _ng_post)
-
+// Equities/indices have no invented weekly macro window. Explicit custom or manual only.
+bool NEWS_BLOCKED = IN_NEWS_FILTER and (IN_NEWS_MANUAL or fn_news_gate(_eia_release) or fn_news_gate(_api_release) or fn_news_gate(_ng_release) or fn_news_gate(_custom_release))
+// Entry evidence uses [1]; a news-bar touch must not activate on the following bar.
+bool NEWS_ENTRY_BLOCKED = NEWS_BLOCKED or NEWS_BLOCKED[1]
+bool NEWS_POST = IN_NEWS_FILTER and not IN_NEWS_MANUAL and (_eia_post or _api_post or _ng_post or _custom_post)
 string NEWS_EVENT = IN_NEWS_MANUAL ? "Manual Override" :
-     _eia_pre  or _eia_live  or _eia_post  ? "EIA Crude"   :
-     _api_pre  or _api_live  or _api_post  ? "API Crude"   :
-     _ng_pre   or _ng_live   or _ng_post   ? "EIA Nat Gas" : "—"
+     _custom_pre or _custom_live or _custom_post ? "Custom release" :
+     _eia_pre or _eia_live or _eia_post ? "EIA Crude" :
+     _api_pre or _api_live or _api_post ? "API Crude" :
+     _ng_pre or _ng_live or _ng_post ? "EIA Nat Gas" : "—"
+string NEWS_PHASE = not IN_NEWS_FILTER ? "Disabled" : IN_NEWS_MANUAL ? "⚠ Manual Block" :
+     _eia_pre or _api_pre or _ng_pre or _custom_pre ? "⚠ Pre-News" :
+     _eia_live or _api_live or _ng_live or _custom_live ? "⚠ Live" :
+     NEWS_BLOCKED ? "⚠ News overlap" :
+     NEWS_POST ? "★ Post-News" : "Clear"
 
-string NEWS_PHASE = IN_NEWS_MANUAL ? "⚠ Manual Block" :
-     _eia_pre  or _api_pre  or _ng_pre  ? "⚠ Pre-News"  :
-     _eia_live or _api_live or _ng_live ? "⚠ Live"      :
-     _eia_post or _api_post or _ng_post ? "★ Post-News" : "Clear"
+// Countdown is calculated from the same timestamps as the gates.
+int NEWS_NEXT_TIME = int(na)
+string NEWS_NEXT_NAME = ""
+array<int> _news_times = array.from(_eia_release, _api_release, _ng_release, _custom_release,
+     _news_auto and IS_CRUDE ? fn_news_release(2, 10, 30, 0, 1) : int(na),
+     _news_auto and IS_CRUDE ? fn_news_release(1, 16, 30, 1, 1) : int(na),
+     _news_auto and IS_NATGAS ? fn_news_release(3, 10, 30, 2, 1) : int(na))
+array<string> _news_names = array.from("EIA Crude", "API Crude", "EIA Nat Gas", "Custom release", "EIA Crude", "API Crude", "EIA Nat Gas")
+for i = 0 to array.size(_news_times) - 1
+    int candidate = array.get(_news_times, i)
+    if not na(candidate) and candidate > time and (na(NEWS_NEXT_TIME) or candidate < NEWS_NEXT_TIME)
+        NEWS_NEXT_TIME := candidate
+        NEWS_NEXT_NAME := array.get(_news_names, i)
 
 // Note: NEWS_SWEEP_BULL/BEAR tracking is in Section 12.1 (after EVT_SSL/BSL_SWEPT declared)
 
@@ -916,9 +977,9 @@ var bool   NEWS_PREPOS_CONF = false   // confirmation event (fires once per news
 var bool   NEWS_PREPOS_ARMED = false  // true once pre-window captures a direction
 var bool   _prepos_post_seen = false  // tracks whether we've entered post window yet
 
-bool _in_pre  = _eia_pre  or _api_pre  or _ng_pre
-bool _in_live = _eia_live or _api_live or _ng_live
-bool _in_post = _eia_post or _api_post or _ng_post
+bool _in_pre  = _eia_pre  or _api_pre  or _ng_pre or _custom_pre
+bool _in_live = _eia_live or _api_live or _ng_live or _custom_live
+bool _in_post = _eia_post or _api_post or _ng_post or _custom_post
 
 // Reset state when a new news cycle begins (pre window starts)
 bool _pre_started = _in_pre and not _in_pre[1]
@@ -931,7 +992,7 @@ if _pre_started
 // HTF bias is available here (Section 6). STRUCTURE_BIAS is not yet declared
 // at this point in execution order — it's confirmed downstream by the sweep.
 // Priority: both HTF biases agree → strong; single HTF → moderate.
-if IN_NEWS_PREPOS and _in_pre and not NEWS_PREPOS_ARMED
+if IN_NEWS_FILTER and IN_NEWS_PREPOS and barstate.isconfirmed and _in_pre and not NEWS_PREPOS_ARMED
     if HTF_BIAS == HTF_BIAS_BULL
         NEWS_PREPOS_DIR   := "Bull"
         NEWS_PREPOS_ARMED := true
@@ -946,7 +1007,7 @@ NEWS_PREPOS_CONF := false
 // immediately after sweep events are set — EVT_SSL/BSL_SWEPT not yet declared here.
 
 // Disarm if post window closes without confirmation (next pre will re-arm)
-if not _in_pre and not _in_live and not _in_post and NEWS_PREPOS_ARMED and not _prepos_post_seen
+if not IN_NEWS_FILTER or not IN_NEWS_PREPOS or (not _in_pre and not _in_live and not _in_post)
     NEWS_PREPOS_ARMED := false
     NEWS_PREPOS_DIR   := ""
 
@@ -1273,7 +1334,7 @@ if bar_index - PDL_SWEPT_BAR > 20
 // ── Pre-Positioning Confirmation (v3.1.0) ────────────────────
 // Placed here (Section 12.1) because EVT_SSL/BSL_SWEPT must be set first.
 // Checks if the post-news sweep confirms the direction captured in pre-window.
-if IN_NEWS_PREPOS and NEWS_PREPOS_ARMED and _in_post and not _prepos_post_seen
+if IN_NEWS_FILTER and IN_NEWS_PREPOS and barstate.isconfirmed and NEWS_PREPOS_ARMED and _in_post and not _prepos_post_seen
     if NEWS_PREPOS_DIR == "Bull" and EVT_SSL_SWEPT
         NEWS_PREPOS_CONF  := true
         _prepos_post_seen := true
@@ -3114,7 +3175,7 @@ float max_risk  = ATR_VAL * IN_MAX_SL_ATR
 // Only create setup if no active trade and no pending setup
 // A pending setup cannot be replaced — it must expire or be invalidated first.
 // NEWS_BLOCKED suppresses new setups during pre-news and live windows.
-bool can_create_setup = not NEWS_BLOCKED and (TRADE_STATE == SETUP_NONE
+bool can_create_setup = not NEWS_ENTRY_BLOCKED and (TRADE_STATE == SETUP_NONE
      or TRADE_STATE == SETUP_EXPIRED or TRADE_STATE == SETUP_INVALIDATED
      or TRADE_STATE == TRADE_TP2_HIT or TRADE_STATE == TRADE_SL_HIT
      or TRADE_STATE == TRADE_BE_HIT)
@@ -3247,7 +3308,7 @@ if TRADE_STATE == SETUP_PENDING
         EVT_SETUP_INVALID := true
         fn_clear_trade_visuals()
 
-    else if ce_touched
+    else if ce_touched and not NEWS_ENTRY_BLOCKED
         // Revalidate: compute current score and check minimum
         int current_score = TRADE_DIR == "Bull" ? bull_score : bear_score
         if current_score >= IN_ENTRY_MIN_SCORE
@@ -3281,7 +3342,7 @@ if TRADE_STATE == SETUP_PENDING
 int RETEST_COOLDOWN = 3
 bool cooldown_ok = bar_index - TRADE_BAR > RETEST_COOLDOWN
 
-bool retest_slot_open = not EVT_SIGNAL_BULL and not EVT_SIGNAL_BEAR
+bool retest_slot_open = not NEWS_ENTRY_BLOCKED and not EVT_SIGNAL_BULL and not EVT_SIGNAL_BEAR
      and not EVT_SETUP_CREATED
      and (TRADE_STATE == SETUP_NONE or TRADE_STATE == SETUP_EXPIRED
           or TRADE_STATE == SETUP_INVALIDATED or TRADE_STATE == TRADE_TP2_HIT
@@ -3553,7 +3614,9 @@ if IN_SHOW_DASH and barstate.islast
     string prepos_suffix = NEWS_PREPOS_ARMED and not _prepos_post_seen ?
          "  ► " + NEWS_PREPOS_DIR :
          NEWS_PREPOS_CONF ? "  ✓ " + NEWS_PREPOS_DIR : ""
-    string news_txt = NEWS_PHASE == "Clear" ? "Clear" :
+    string news_countdown = not na(NEWS_NEXT_TIME) ? NEWS_NEXT_NAME + " in " + str.tostring(math.max(0, math.ceil((NEWS_NEXT_TIME - (barstate.isrealtime ? timenow : time)) / 60000.0)), "#") + "m" :
+         IN_NEWS_AUTO and (IS_CRUDE or IS_NATGAS) and year(time, "America/New_York") != 2026 ? "Schedule unverified — manual only" : "Clear"
+    string news_txt = NEWS_PHASE == "Clear" ? news_countdown :
          NEWS_PHASE + "  " + NEWS_EVENT + prepos_suffix
     dash_row(2, "News", news_txt, news_clr)
 
